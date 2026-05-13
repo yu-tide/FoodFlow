@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     BAILIAN_MODEL: str = "qwen-plus"
     AI_TIMEOUT_SECONDS: int = 30
 
+    # Vision 模式: mock | bailian
+    VISION_MODE: str = "mock"
+    BAILIAN_VISION_MODEL: str = "qwen-vl-max"
+    VISION_TIMEOUT_SECONDS: int = 30
+
     # Redis
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379

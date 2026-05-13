@@ -14,13 +14,15 @@ from app.models.food_record import FoodRecord
 from app.models.task_event import TaskEvent
 from app.models.user import User
 from app.schemas.foods import (
+    ConfirmFoodRequest,
+    ConfirmFoodResponse,
     FoodDetailResponse,
     FoodListItem,
     FoodListItemDetail,
     FoodListResponse,
     VALID_MEAL_TYPES,
 )
-from app.services.food_service import get_food_detail
+from app.services.food_service import confirm_food_record, get_food_detail
 from app.services.upload_service import save_upload, validate_image_file
 from app.services.task_service import create_analyze_task, dispatch_analyze_task
 
@@ -212,3 +214,20 @@ async def get_food_detail_endpoint(
 
     detail = await get_food_detail(db, record_id)
     return FoodDetailResponse(data=detail)
+
+
+@router.patch("/{record_id}/confirm")
+async def confirm_food_record_endpoint(
+    record_id: str,
+    body: ConfirmFoodRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        record = await confirm_food_record(
+            db, record_id, str(current_user.id),
+            [item.model_dump() for item in body.items],
+        )
+        return ConfirmFoodResponse(record_id=str(record.id))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

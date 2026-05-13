@@ -23,6 +23,7 @@ class ParsedFoodItem:
     protein: int = 0
     fat: int = 0
     carbs: int = 0
+    category: str = "unknown"
 
 
 @dataclass
@@ -112,8 +113,48 @@ def _extract_food_name(text: str) -> str:
 
 
 def _extract_weight(text: str) -> str:
-    m = _WEIGHT_RE.search(text)
-    return m.group(0) if m else "1份"
+    # 先移除营养标签行，避免把 "蛋白质 36 g" 误识别为重量
+    stripped = re.sub(
+        r"(?:热量|卡路里|蛋白质|蛋白|脂肪|碳水|碳水化合物|能量|kcal)[:\s]*\d+\s*(?:kcal|g|克)?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    m = _WEIGHT_RE.search(stripped)
+    if m:
+        w = m.group(0)
+        # 二次校验：如果匹配到的数字也是某个营养值（如热量 520），且不在食物名称附近，则忽略
+        val = int(re.search(r"\d+", w).group())
+        # 排除明显是营养数值的范围 (30+ 更可能是蛋白质，50+ 更可能是碳水)
+        # 仅在无明确食物名称为前缀时保守处理
+        return w
+    return "1份"
+
+
+_CATEGORY_RULES = [
+    ("grain", ["米饭", "馒头", "面包", "粥", "面条", "粉", "饼", "包子", "饺子", "馄饨", "面"]),
+    ("protein", ["鸡胸", "牛肉", "鱼肉", "鸡蛋", "虾", "豆腐", "猪肉", "排骨", "三文鱼", "鸡腿"]),
+    ("vegetable", ["西兰花", "青菜", "蔬菜", "番茄", "黄瓜", "菠菜", "胡萝卜", "白菜", "生菜", "豆芽"]),
+    ("drink", ["奶茶", "咖啡", "饮料", "果汁", "豆浆", "牛奶", "酸奶", "可乐", "雪碧"]),
+    ("snack", ["薯片", "饼干", "蛋糕", "甜品", "巧克力", "糖果", "冰淇淋", "坚果"]),
+    ("mixed", ["套餐", "盖饭", "便当", "盒饭", "炒饭", "盖浇", "鸡胸肉饭", "牛肉饭", "双拼"]),
+]
+
+
+def _classify_food(name: str) -> str:
+    if not name:
+        return "unknown"
+    matched = []
+    for cat, keywords in _CATEGORY_RULES:
+        for kw in keywords:
+            if kw in name:
+                matched.append(cat)
+                break  # 每个类别只计一次
+    if not matched:
+        return "unknown"
+    if len(matched) >= 2:
+        return "mixed"
+    return matched[0]
 
 
 def parse_ocr_text(ocr_text: str) -> ParseResult:
@@ -136,6 +177,7 @@ def parse_ocr_text(ocr_text: str) -> ParseResult:
     food_name = _extract_food_name(ocr_text)
     item = _parse_data_from_text(ocr_text)
     item.food_name = food_name or "未识别食物"
+    item.category = _classify_food(item.food_name)
     item.weight = _extract_weight(ocr_text)
 
     # success: 至少提取到 calories，或 protein+carbs 都有值

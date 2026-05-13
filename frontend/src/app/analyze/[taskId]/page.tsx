@@ -355,11 +355,36 @@ export default function AnalyzeTaskPage() {
     return () => window.clearInterval(timer)
   }, [isProcessing, syncTask])
 
-  // SUCCESS + record_id → 跳转结果页
+  // SUCCESS + record_id → 判断是否需确认再跳转
   useEffect(() => {
-    if (isFinished && task.record_id) {
-      router.push(`/records/${task.record_id}`)
+    if (!isFinished || !task.record_id) return
+
+    let cancelled = false
+    async function decideRedirect() {
+      try {
+        const res = await fetch(`${API_BASE}/api/foods/${task.record_id}`, {
+          headers: {
+            ...(typeof window !== "undefined" && localStorage.getItem("token")
+              ? { Authorization: `Bearer ${localStorage.getItem("token")}` }
+              : {}),
+          },
+        })
+        if (!res.ok || cancelled) return
+        const body = await res.json()
+        const data = body.data || body
+        const items: Array<{ estimated?: boolean; source?: string }> =
+          data?.food_items || data?.foodItems || []
+        const needsConfirm = items.some(
+          (it) => it.estimated === true || it.source === "vision" || it.source === "fusion"
+        )
+        if (cancelled) return
+        router.push(needsConfirm ? `/confirm/${task.record_id}` : `/records/${task.record_id}`)
+      } catch {
+        if (!cancelled) router.push(`/records/${task.record_id}`)
+      }
     }
+    decideRedirect()
+    return () => { cancelled = true }
   }, [isFinished, task.record_id, router])
 
   return (

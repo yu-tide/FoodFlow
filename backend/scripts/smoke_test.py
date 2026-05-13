@@ -34,6 +34,7 @@ BASE = f"{API_BASE}{API_PREFIX}"
 
 TEST_PHONE = os.getenv("TEST_PHONE", "13800138000")
 TEST_PASSWORD = os.getenv("TEST_PASSWORD", "Test123456")
+TEST_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", "")
 TEST_NICKNAME = "冒烟测试用户"
 
 MAX_POLL_SECONDS = 60
@@ -41,7 +42,7 @@ POLL_INTERVAL = 1.0
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-TEST_IMAGE = FIXTURE_DIR / "test-food.jpg"
+TEST_IMAGE = Path(TEST_IMAGE_PATH) if TEST_IMAGE_PATH else (FIXTURE_DIR / "test-food.jpg")
 
 # --- Helpers ---
 _client: httpx.AsyncClient | None = None
@@ -309,6 +310,56 @@ async def step_check_result(token: str, record_id: str):
     log("所有字段校验通过", "ok")
 
 
+async def step_check_records_list(token: str):
+    """6. 查询 records 列表"""
+    log("查询记录列表: /api/foods?range=week...")
+    res = await api_get("/foods?range=week", token)
+    if res.status_code == 401:
+        log("未授权 (401)", "fail")
+        raise SystemExit(8)
+    if not res.is_success:
+        log(f"查询失败: {res.status_code}", "fail")
+        raise SystemExit(8)
+
+    body = res.json()
+    items = body.get("data", [])
+    log(f"records count: {len(items)}", "ok")
+
+
+async def step_check_dashboard(token: str):
+    """7. 查询 dashboard summary"""
+    log("查询仪表盘: /api/dashboard/summary...")
+    res = await api_get("/dashboard/summary", token)
+    if res.status_code == 401:
+        log("未授权 (401)", "fail")
+        raise SystemExit(9)
+    if not res.is_success:
+        log(f"查询失败: {res.status_code}", "fail")
+        raise SystemExit(9)
+
+    body = res.json()
+    today = body.get("today", {})
+    macros = body.get("macros", [])
+    log(f"today consumed={today.get('consumedCalories')} macros={len(macros)} items", "ok")
+
+
+async def step_check_weekly(token: str):
+    """8. 查询每周统计"""
+    log("查询每周统计: /api/statistics/weekly...")
+    res = await api_get("/statistics/weekly", token)
+    if res.status_code == 401:
+        log("未授权 (401)", "fail")
+        raise SystemExit(10)
+    if not res.is_success:
+        log(f"查询失败: {res.status_code}", "fail")
+        raise SystemExit(10)
+
+    body = res.json()
+    daily = body.get("daily_calories", [])
+    rec_cnt = body.get("record_count", 0)
+    log(f"daily_calories={len(daily)} days record_count={rec_cnt}", "ok")
+
+
 # --- Main ---
 
 async def main():
@@ -322,6 +373,9 @@ async def main():
     task_id = await step_upload(token)
     record_id = await step_poll_task(token, task_id)
     await step_check_result(token, record_id)
+    await step_check_records_list(token)
+    await step_check_dashboard(token)
+    await step_check_weekly(token)
 
     print()
     print("=" * 20)

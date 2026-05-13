@@ -88,3 +88,23 @@ class FoodListItem(BaseModel):
 
 class FoodListResponse(BaseModel):
     data: list[FoodListItem]
+
+
+class ConfirmFoodItem(BaseModel):
+    id: str
+    food_name: str
+    weight: str = ""
+    category: str = "unknown"
+    calories: int = 0
+    protein: int = 0
+    carbs: int = 0
+    fat: int = 0
+
+
+class ConfirmFoodRequest(BaseModel):
+    items: list[ConfirmFoodItem]
+
+
+class ConfirmFoodResponse(BaseModel):
+    message: str = "确认成功"
+    record_id: str

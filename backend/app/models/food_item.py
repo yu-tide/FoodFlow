@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, String, Text, Integer, ForeignKey
+from sqlalchemy import Boolean, Column, Float, String, Text, Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.db.base import Base
@@ -22,5 +22,9 @@ class FoodItem(Base):
     protein = Column(Integer, default=0)
     carbs = Column(Integer, default=0)
     fat = Column(Integer, default=0)
+    category = Column(String(20), default="unknown")
+    confidence = Column(Float, default=0.0, nullable=False)
+    source = Column(String(20), default="ocr", nullable=False)
+    estimated = Column(Boolean, default=False, nullable=False)
     image_url = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0)

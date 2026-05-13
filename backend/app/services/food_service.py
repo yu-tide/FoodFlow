@@ -12,7 +12,9 @@ from app.models.food_record import FoodRecord
 from app.models.task_event import TaskEvent
 from app.services.ai_service import generate_summary
 from app.services.food_parser import parse_ocr_text
-from app.services.ocr_service import recognize_image_text, MOCK_OCR_TEXT
+from app.services.fusion_service import fuse
+from app.services.ocr_service import _image_url_to_path, recognize_image_text, MOCK_OCR_TEXT
+from app.services.vision_service import recognize_food_from_image
 
 logger = logging.getLogger(__name__)
 
@@ -143,67 +145,65 @@ async def run_mock_analysis(task_id: str, meal_type: str, remark: str | None = N
         ocr_text: str | None = None
         ocr_engine = "mock"
         parser_result = None
+        fusion_result = None
         ai_engine = ""
         ai_summary_text: str | None = None
         ai_latency_val = "2.4s"
+        image_path = _image_url_to_path(task.image_url)
 
         for status, progress, eta, event_title in STAGES:
             await _update_task_status(db, task_id, status, progress, eta)
             await _add_task_event(db, task_id, event_title)
             logger.info("task=%s stage=%s progress=%s%%", task_id, status, progress)
 
-            # OCR_PROCESSING 阶段执行真实 OCR
+            # OCR_PROCESSING: OCR (空文本不中断，让 vision 补偿)
             if status == "OCR_PROCESSING":
                 ocr_result = recognize_image_text(task.image_url)
-                if not ocr_result.success:
-                    await _fail_task(db, task_id, ocr_result.error_message or "OCR 识别失败")
-                    logger.error("task=%s OCR FAILED: %s", task_id, ocr_result.error_message)
-                    return
-                if not ocr_result.text.strip():
-                    await _fail_task(db, task_id, "PaddleOCR 未识别到有效文本")
-                    logger.error("task=%s OCR empty result", task_id)
-                    return
-                ocr_text = ocr_result.text
+                ocr_text = ocr_result.text if ocr_result.success else ""
                 ocr_engine = ocr_result.engine
-                logger.info("task=%s OCR engine=%s text=%s", task_id, ocr_engine, ocr_text[:60])
+                if not ocr_result.success:
+                    logger.warning("task=%s OCR failed: %s (will try vision)", task_id, ocr_result.error_message)
+                logger.info("task=%s OCR engine=%s text_len=%d", task_id, ocr_engine, len(ocr_text or ""))
 
-            # STRUCTURING 阶段: 解析 OCR 文本
-            if status == "STRUCTURING" and ocr_text and ocr_text != MOCK_OCR_TEXT:
-                parser_result = parse_ocr_text(ocr_text)
-                logger.info("task=%s parser success=%s items=%d",
-                            task_id, parser_result.success, len(parser_result.items))
+            # STRUCTURING: 解析 OCR → 有则 parser
+            if status == "STRUCTURING":
+                if ocr_text and ocr_text != MOCK_OCR_TEXT:
+                    parser_result = parse_ocr_text(ocr_text)
+                    logger.info("task=%s parser success=%s items=%d",
+                                task_id, parser_result.success, len(parser_result.items))
+                # 同时调用 Vision
+                if image_path:
+                    vision_result = recognize_food_from_image(image_path, ocr_text)
+                else:
+                    vision_result = None
+                # 融合 OCR + Vision
+                fusion_result = fuse(ocr_text=ocr_text, parser_result=parser_result, vision_result=vision_result)
+                logger.info("task=%s fusion source=%s items=%d warning=%s",
+                            task_id, fusion_result.source, len(fusion_result.items), fusion_result.warning or "none")
 
             # AI_SUMMARIZING 阶段调用大模型
             if status == "AI_SUMMARIZING":
-                if parser_result and parser_result.success:
-                    ai_result = generate_summary(
-                        food_name=parser_result.items[0].food_name if parser_result.items else "",
-                        total_calories=parser_result.total_calories,
-                        protein=parser_result.total_protein,
-                        carbs=parser_result.total_carbs,
-                        fat=parser_result.total_fat,
-                        meal_type=meal_type,
-                        remark=remark,
-                        ocr_text=ocr_text or "",
-                    )
-                else:
-                    ai_result = generate_summary(
-                        meal_type=meal_type, remark=remark, ocr_text=ocr_text or "",
-                    )
+                cal = fusion_result.items[0].calories if fusion_result and fusion_result.items else 0
+                pro = fusion_result.items[0].protein if fusion_result and fusion_result.items else 0
+                carb = fusion_result.items[0].carbs if fusion_result and fusion_result.items else 0
+                fat = fusion_result.items[0].fat if fusion_result and fusion_result.items else 0
+                food = fusion_result.items[0].food_name if fusion_result and fusion_result.items else ""
+                ai_result = generate_summary(
+                    food_name=food,
+                    total_calories=cal, protein=pro, carbs=carb, fat=fat,
+                    meal_type=meal_type, remark=remark, ocr_text=ocr_text or "",
+                )
                 ai_summary_text = ai_result.text
                 ai_latency_val = ai_result.latency
                 ai_engine = ai_result.engine
-                logger.info("task=%s AI engine=%s latency=%s fallback=%s",
-                            task_id, ai_engine, ai_latency_val, ai_result.fallback_reason or "none")
+                logger.info("task=%s AI engine=%s latency=%s", task_id, ai_engine, ai_latency_val)
 
             time.sleep(1)  # 开发环境模拟延迟
 
-        prompt_ver_base = f"{ocr_engine}-ocr-v1"
-        if parser_result and parser_result.success:
-            prompt_ver_base = "parser-rule-v1"
-        elif parser_result:
-            prompt_ver_base = "parser-fallback-v1"
-        prompt_ver = f"{prompt_ver_base}+{ai_engine}" if ai_engine else prompt_ver_base
+        # prompt_version 标记
+        source_tag = fusion_result.source if fusion_result else "unknown"
+        prompt_ver = f"{ocr_engine}-ocr+{source_tag}+{ai_engine}" if ai_engine else f"{ocr_engine}-ocr+{source_tag}"
+        prompt_ver = prompt_ver[:50]
 
         record = await _create_food_record(
             db, task_id, str(task.user_id), meal_type, remark, task.image_url or "",
@@ -213,20 +213,49 @@ async def run_mock_analysis(task_id: str, meal_type: str, remark: str | None = N
             ai_latency=ai_latency_val,
             ai_engine=ai_engine,
         )
-        # 根据 parser 结果覆盖营养数据
-        if parser_result and parser_result.success:
+
+        # 使用 fusion 结果写入 food_items 和覆盖营养
+        if fusion_result and fusion_result.items:
+            fused = fusion_result.items[0]
+            record.total_calories = fused.calories
+            record.protein = fused.protein
+            record.carbohydrate = fused.carbs
+            record.fat = fused.fat
+            record.prompt_version = prompt_ver
+            await db.commit()
+
+            for i, item in enumerate(fusion_result.items, start=1):
+                db.add(FoodItem(
+                    record_id=record.id,
+                    food_name=item.food_name,
+                    category=item.category,
+                    weight=item.weight,
+                    calories=item.calories,
+                    protein=item.protein,
+                    carbs=item.carbs,
+                    fat=item.fat,
+                    confidence=item.confidence,
+                    source=item.source,
+                    estimated=item.estimated,
+                    sort_order=i,
+                ))
+            await db.commit()
+            logger.info("task=%s fusion items=%d cal=%d pro=%d fat=%d carb=%d source=%s",
+                        task_id, len(fusion_result.items),
+                        fused.calories, fused.protein, fused.carbs, fused.fat, fusion_result.source)
+        elif parser_result and parser_result.success:
+            # fallback: 旧 OCR-only 路径（兼容）
             record.total_calories = parser_result.total_calories
             record.protein = parser_result.total_protein
             record.carbohydrate = parser_result.total_carbs
             record.fat = parser_result.total_fat
             record.prompt_version = prompt_ver
             await db.commit()
-
-            # 创建真实 food_items
             for i, item in enumerate(parser_result.items, start=1):
                 db.add(FoodItem(
                     record_id=record.id,
                     food_name=item.food_name,
+                    category=item.category,
                     weight=item.weight,
                     calories=item.calories,
                     protein=item.protein,
@@ -235,16 +264,11 @@ async def run_mock_analysis(task_id: str, meal_type: str, remark: str | None = N
                     sort_order=i,
                 ))
             await db.commit()
-            logger.info("task=%s parser items=%d cal=%d pro=%d fat=%d carb=%d",
-                        task_id, len(parser_result.items),
-                        parser_result.total_calories, parser_result.total_protein,
-                        parser_result.total_fat, parser_result.total_carbs)
+        elif fusion_result and fusion_result.warning:
+            # 都失败
+            logger.warning("task=%s fusion warning: %s", task_id, fusion_result.warning)
+            await _create_food_items(db, str(record.id))
         else:
-            # parser 失败 → mock fallback，但标记
-            if parser_result and not parser_result.success:
-                record.prompt_version = prompt_ver
-                await db.commit()
-                logger.warning("task=%s parser fallback to mock food_items", task_id)
             await _create_food_items(db, str(record.id))
 
         await _complete_task(db, task_id, str(record.id))
@@ -312,3 +336,56 @@ async def get_food_detail(db: AsyncSession, record_id: str) -> dict:
         "macro_targets": macro_targets,
         "macro_percentages": macro_percentages,
     }
+
+
+async def confirm_food_record(
+    db: AsyncSession,
+    record_id: str,
+    user_id: str,
+    items: list[dict],
+) -> FoodRecord:
+    """用户确认/修改识别结果"""
+    # 查 record 并校验权限
+    result = await db.execute(select(FoodRecord).where(FoodRecord.id == record_id))
+    record = result.scalar_one_or_none()
+    if record is None or str(record.user_id) != user_id:
+        raise ValueError("记录不存在或无权访问")
+
+    # 删除旧 food_items
+    old_items = await db.execute(select(FoodItem).where(FoodItem.record_id == record_id))
+    for old in old_items.scalars().all():
+        await db.delete(old)
+    await db.flush()
+
+    # 写入新 items
+    total_cal = total_pro = total_carb = total_fat = 0
+    for i, item in enumerate(items, start=1):
+        db.add(FoodItem(
+            record_id=record.id,
+            food_name=item.get("food_name", ""),
+            weight=item.get("weight", ""),
+            category=item.get("category", "unknown"),
+            calories=item.get("calories", 0),
+            protein=item.get("protein", 0),
+            carbs=item.get("carbs", 0),
+            fat=item.get("fat", 0),
+            confidence=1.0,
+            source="manual",
+            estimated=False,
+            sort_order=i,
+        ))
+        total_cal += item.get("calories", 0)
+        total_pro += item.get("protein", 0)
+        total_carb += item.get("carbs", 0)
+        total_fat += item.get("fat", 0)
+
+    # 更新 food_record 汇总
+    record.total_calories = total_cal
+    record.protein = total_pro
+    record.carbohydrate = total_carb
+    record.fat = total_fat
+    record.status_label = "用户已确认"
+
+    await db.commit()
+    await db.refresh(record)
+    return record

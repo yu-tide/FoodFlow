@@ -10,6 +10,10 @@ export type FoodItemRaw = {
   protein: number
   carbohydrate: number
   fat: number
+  category?: string | null
+  confidence?: number | null
+  source?: string | null
+  estimated?: boolean | null
   image_url?: string | null
 }
 
@@ -76,6 +80,10 @@ export type FoodItem = {
   protein: number
   carbs: number
   fat: number
+  category: string
+  confidence: number
+  source: string
+  estimated: boolean
   imageUrl: string
 }
 
@@ -160,6 +168,10 @@ export function adaptFoodDetail(data: FoodDetailRaw): AnalyzeResult {
       protein: item.protein,
       carbs: item.carbohydrate,
       fat: item.fat,
+      category: item.category ?? 'unknown',
+      confidence: item.confidence ?? 0,
+      source: item.source ?? 'ocr',
+      estimated: item.estimated ?? false,
       imageUrl: resolveImageUrl(item.image_url),
     })),
     aiSummary: splitSummary(r.summary),
