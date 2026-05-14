@@ -18,6 +18,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { apiGet, ApiError } from "@/services/api";
+import { formatFoodItemLabels } from "@/lib/foodLabels";
 import { getFoodRecord, type AnalyzeResult, type FoodItem } from "@/services/foods";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -129,11 +130,7 @@ export default function ConfirmPage() {
           {items.map((item, index) => (
             <div key={item.id || index} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-2 flex items-center gap-2">
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${item.source === "ocr" ? "bg-green-50 text-green-700" : "bg-violet-50 text-violet-600"}`}>
-                  {item.source === "ocr" ? "OCR 识别" : item.source === "fusion" ? "融合识别" : "估算"}
-                </span>
-                {item.estimated && <span className="text-xs font-bold text-amber-600">需确认</span>}
-                {item.confidence > 0 && <span className="text-xs text-slate-400">置信度 {(item.confidence * 100).toFixed(0)}%</span>}
+                <span className="text-xs font-bold text-slate-500">{formatFoodItemLabels(item)}</span>
               </div>
 
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">

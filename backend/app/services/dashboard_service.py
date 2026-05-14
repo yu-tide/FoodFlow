@@ -56,9 +56,8 @@ async def _build_user(user: User) -> DashboardUser:
     )
 
 
-def _build_today(records: list[FoodRecord]) -> TodaySummary:
+def _build_today(records: list[FoodRecord], target: int = 2000) -> TodaySummary:
     consumed = sum(r.total_calories or 0 for r in records)
-    target = 2000
     remaining = max(target - consumed, 0)
 
     if consumed == 0:
@@ -206,7 +205,7 @@ async def get_dashboard_summary(db: AsyncSession, user: User) -> DashboardRespon
 
     return DashboardResponse(
         user=await _build_user(user),
-        today=_build_today(today_records),
+        today=_build_today(today_records, target=user.target_calories or 2000),
         macros=_build_macros(today_records),
         weekly=await _build_weekly(db, user_id),
         activeTask=await _build_active_task(db, user_id),

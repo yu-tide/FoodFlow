@@ -43,7 +43,7 @@ def _write_ai_log(
     cache_hit: bool = False,
     user_id: str | None = None,
 ) -> None:
-    """异步写入 AI 调用日志。写入失败不影响主流程。"""
+    """写入 AI 调用日志。写入失败不影响主流程。"""
     try:
         import asyncio
         from app.db.session import async_session
@@ -66,7 +66,11 @@ def _write_ai_log(
                 ))
                 await db.commit()
 
-        asyncio.run(_insert())
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_insert())  # fire-and-forget, 不阻塞主任务
+        except RuntimeError:
+            asyncio.run(_insert())  # 无运行中 event loop，直接同步执行
     except Exception:
         logger.warning("ai_service: log write failed (non-blocking)")
 
@@ -248,6 +252,7 @@ def generate_summary(
     meal_type: str = "",
     remark: str = "",
     ocr_text: str = "",
+    estimated: bool = False,
 ) -> AISummaryResult:
     """统一入口"""
     if settings.AI_MODE == "bailian":
@@ -280,6 +285,7 @@ def generate_summary(
                 fat=fat,
                 ocr_text=ocr_text,
                 remark=remark,
+                estimated=estimated,
             ),
         ]
         result = _call_bailian(messages)

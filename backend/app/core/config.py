@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
 
+    # SMS 模式: mock | provider
+    SMS_MODE: str = "mock"
+
     # OCR 模式: mock | paddle
     OCR_MODE: str = "mock"
 

@@ -31,6 +31,7 @@ import {
   Wheat,
 } from 'lucide-react'
 import { ApiError } from '@/services/api'
+import { formatFoodItemLabels } from '@/lib/foodLabels'
 import { getFoodRecord, type AnalyzeResult, type FoodItem, type MacroInfo } from '@/services/foods'
 
 type MacroKey = 'protein' | 'carbs' | 'fat'
@@ -113,7 +114,10 @@ export default function RecordDetailPage() {
 
   const [user] = useState<UserProfile>(getUserProfile)
   const [result, setResult] = useState<AnalyzeResult | null>(null)
+  const [foodItems, setFoodItems] = useState<FoodItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
 
   const loadRecord = useCallback(async () => {
@@ -123,6 +127,7 @@ export default function RecordDetailPage() {
     try {
       const data = await getFoodRecord(recordId)
       setResult(data)
+      setFoodItems(data.foodItems)
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 401) {
@@ -147,8 +152,22 @@ export default function RecordDetailPage() {
     loadRecord()
   }, [loadRecord])
 
-  function handleSaveRecord() {
-    router.push('/records')
+  async function handleSaveRecord() {
+    setSaving(true); setSaveMsg('')
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`${API_BASE}/api/foods/${recordId}/confirm`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ items: foodItems.map(it => ({ id: it.id, food_name: it.name, weight: it.weight, category: it.category || 'unknown', calories: it.calories, protein: it.protein, carbs: it.carbs, fat: it.fat })) }),
+      })
+      if (res.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); router.push('/login'); return }
+      if (!res.ok) throw new Error('保存失败')
+      setSaveMsg('保存成功')
+      loadRecord()
+    } catch {
+      setSaveMsg('保存失败，请重试')
+    } finally { setSaving(false) }
   }
 
   function handleReAnalyze() {
@@ -191,8 +210,8 @@ export default function RecordDetailPage() {
             <CalorieResultCard result={result} />
             <MacroResultCard macros={result.macros} />
           </div>
-          <FoodItemsCard items={result.foodItems} />
-          <ActionBar onSave={handleSaveRecord} onReAnalyze={handleReAnalyze} onExport={handleExport} />
+          <FoodItemsCard items={foodItems} onItemsChange={setFoodItems} />
+          <ActionBar onSave={handleSaveRecord} onReAnalyze={handleReAnalyze} onExport={handleExport} saving={saving} saveMsg={saveMsg} />
         </div>
         <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
           <MealImageCard imageUrl={result.imageUrl} />
@@ -564,63 +583,125 @@ function MacroProgressRow({ item }: { item: MacroInfo }) {
   )
 }
 
-function FoodItemsCard({ items }: { items: FoodItem[] }) {
+function FoodItemsCard({ items, onItemsChange }: { items: FoodItem[]; onItemsChange: (items: FoodItem[]) => void }) {
+  const [adding, setAdding] = useState(false)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [newItem, setNewItem] = useState<Partial<FoodItem>>({})
+  const [editDraft, setEditDraft] = useState<Partial<FoodItem>>({})
+
+  const startAdd = () => { setAdding(true); setNewItem({ name: "", weight: "", calories: 0, protein: 0, carbs: 0, fat: 0, category: "unknown", source: "manual", estimated: false, confidence: 1 }) }
+  const cancelAdd = () => { setAdding(false); setNewItem({}) }
+  const confirmAdd = () => {
+    if (!newItem.name?.trim()) return
+    const id = "new-" + Date.now()
+    onItemsChange([...items, { id, name: newItem.name || "", weight: newItem.weight || "", calories: Number(newItem.calories) || 0, protein: Number(newItem.protein) || 0, carbs: Number(newItem.carbs) || 0, fat: Number(newItem.fat) || 0, category: newItem.category || "unknown", source: "manual", estimated: false, confidence: 1, imageUrl: "" }])
+    setAdding(false); setNewItem({})
+  }
+
+  const startEdit = (index: number) => {
+    setEditingIndex(index)
+    setEditDraft({ ...items[index] })
+  }
+  const cancelEdit = () => { setEditingIndex(null); setEditDraft({}) }
+  const confirmEdit = (index: number) => {
+    const updated = items.map((it, i) => i === index ? {
+      ...it,
+      name: editDraft.name || it.name,
+      weight: editDraft.weight || it.weight,
+      calories: Number(editDraft.calories) ?? it.calories,
+      protein: Number(editDraft.protein) ?? it.protein,
+      carbs: Number(editDraft.carbs) ?? it.carbs,
+      fat: Number(editDraft.fat) ?? it.fat,
+      source: "manual",
+      estimated: false,
+      confidence: 1,
+    } : it)
+    onItemsChange(updated)
+    setEditingIndex(null); setEditDraft({})
+  }
+
   return (
     <CardShell className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
       <div className="mb-3 flex shrink-0 items-center justify-between gap-4">
-        <CardTitle
-          title="识别食物明细"
-          icon={<ClipboardList className="h-5 w-5 text-green-600" />}
-        />
-
-        <button className="flex h-9 items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-3 text-[14px] font-black text-green-700 transition hover:bg-green-100">
-          <Plus className="h-4 w-4" />
-          添加
+        <CardTitle title="识别食物明细" icon={<ClipboardList className="h-5 w-5 text-green-600" />} />
+        <button onClick={startAdd} className="flex h-9 items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-3 text-[14px] font-black text-green-700 transition hover:bg-green-100">
+          <Plus className="h-4 w-4" />添加
         </button>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-100">
         <div className="grid h-10 shrink-0 grid-cols-[minmax(160px,1.4fr)_0.65fr_0.75fr_0.75fr_0.75fr_0.75fr_70px] items-center bg-slate-50 px-3 text-[13px] font-black text-slate-500">
-          <div>食物</div>
-          <div>重量</div>
-          <div>热量</div>
-          <div>蛋白质</div>
-          <div>碳水</div>
-          <div>脂肪</div>
-          <div className="text-right">操作</div>
+          <div>食物</div><div>重量</div><div>热量</div><div>蛋白质</div><div>碳水</div><div>脂肪</div><div className="text-right">操作</div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="grid min-h-[58px] grid-cols-[minmax(160px,1.4fr)_0.65fr_0.75fr_0.75fr_0.75fr_0.75fr_70px] items-center border-t border-slate-100 px-3 text-[14px]"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <FoodThumb imageUrl={item.imageUrl} />
-                <div className="truncate font-black text-slate-800">
-                  {item.name}
-                </div>
-              </div>
-
-              <div className="font-bold text-slate-500">{item.weight}</div>
-              <div className="font-bold text-orange-500">
-                {item.calories}kcal
-              </div>
-              <div className="font-bold text-slate-500">{item.protein}g</div>
-              <div className="font-bold text-slate-500">{item.carbs}g</div>
-              <div className="font-bold text-slate-500">{item.fat}g</div>
-
-              <div className="text-right">
-                <button className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-green-700 transition hover:bg-green-50">
-                  <PencilLine className="h-4 w-4" />
-                </button>
-              </div>
+          {items.map((item, index) => (
+            <div key={item.id} className={`grid min-h-[58px] grid-cols-[minmax(160px,1.4fr)_0.65fr_0.75fr_0.75fr_0.75fr_0.75fr_70px] items-center border-t border-slate-100 px-3 text-[14px] ${editingIndex === index ? 'bg-amber-50/30' : ''}`}>
+              {editingIndex === index ? (
+                <>
+                  <InlineInput value={editDraft.name || ""} onChange={(v) => setEditDraft({ ...editDraft, name: v })} />
+                  <InlineInput value={editDraft.weight || ""} onChange={(v) => setEditDraft({ ...editDraft, weight: v })} />
+                  <InlineInput type="number" value={String(editDraft.calories || "")} onChange={(v) => setEditDraft({ ...editDraft, calories: Number(v) })} />
+                  <InlineInput type="number" value={String(editDraft.protein || "")} onChange={(v) => setEditDraft({ ...editDraft, protein: Number(v) })} />
+                  <InlineInput type="number" value={String(editDraft.carbs || "")} onChange={(v) => setEditDraft({ ...editDraft, carbs: Number(v) })} />
+                  <InlineInput type="number" value={String(editDraft.fat || "")} onChange={(v) => setEditDraft({ ...editDraft, fat: Number(v) })} />
+                  <div className="flex items-center justify-end gap-1">
+                    <button onClick={() => confirmEdit(index)} className="rounded-lg bg-green-600 px-2 py-1 text-[12px] font-bold text-white">保存</button>
+                    <button onClick={cancelEdit} className="rounded-lg bg-slate-200 px-2 py-1 text-[12px] font-bold text-slate-600">取消</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <FoodThumb imageUrl={item.imageUrl} />
+                    <div className="min-w-0">
+                      <div className="truncate font-black text-slate-800">{item.name}</div>
+                      <div className="mt-0.5 text-[11px] font-bold text-slate-500">{formatFoodItemLabels(item)}</div>
+                    </div>
+                  </div>
+                  <div className="font-bold text-slate-500">{item.weight}</div>
+                  <div className="font-bold text-orange-500">{item.calories}kcal</div>
+                  <div className="font-bold text-slate-500">{item.protein}g</div>
+                  <div className="font-bold text-slate-500">{item.carbs}g</div>
+                  <div className="font-bold text-slate-500">{item.fat}g</div>
+                  <div className="text-right">
+                    <button onClick={() => startEdit(index)} className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-green-700 transition hover:bg-green-50">
+                      <PencilLine className="h-4 w-4" />
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ))}
+          {adding && (
+            <div className="grid min-h-[58px] grid-cols-[minmax(160px,1.4fr)_0.65fr_0.75fr_0.75fr_0.75fr_0.75fr_70px] items-center border-t border-slate-100 bg-green-50/20 px-3 text-[14px]">
+              <InlineInput value={newItem.name || ""} onChange={(v) => setNewItem({ ...newItem, name: v })} placeholder="食物名" />
+              <InlineInput value={newItem.weight || ""} onChange={(v) => setNewItem({ ...newItem, weight: v })} placeholder="份量" />
+              <InlineInput type="number" value={String(newItem.calories || "")} onChange={(v) => setNewItem({ ...newItem, calories: Number(v) })} />
+              <InlineInput type="number" value={String(newItem.protein || "")} onChange={(v) => setNewItem({ ...newItem, protein: Number(v) })} />
+              <InlineInput type="number" value={String(newItem.carbs || "")} onChange={(v) => setNewItem({ ...newItem, carbs: Number(v) })} />
+              <InlineInput type="number" value={String(newItem.fat || "")} onChange={(v) => setNewItem({ ...newItem, fat: Number(v) })} />
+              <div className="flex items-center justify-end gap-1">
+                <button onClick={confirmAdd} className="rounded-lg bg-green-600 px-2 py-1 text-[12px] font-bold text-white">确定</button>
+                <button onClick={cancelAdd} className="rounded-lg bg-slate-200 px-2 py-1 text-[12px] font-bold text-slate-600">取消</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </CardShell>
+  )
+}
+
+function InlineInput({ value, onChange, type = "text", placeholder = "" }: { value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="h-8 w-full rounded border border-slate-200 bg-white px-2 text-[13px] font-semibold text-slate-800 outline-none focus:border-green-500"
+    />
   )
 }
 
@@ -755,24 +836,24 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 }
 
 function ActionBar({
-  onSave,
-  onReAnalyze,
-  onExport,
+  onSave, onReAnalyze, onExport,
+  saving = false, saveMsg = "",
 }: {
-  onSave: () => void
-  onReAnalyze: () => void
-  onExport: () => void
+  onSave: () => void; onReAnalyze: () => void; onExport: () => void
+  saving?: boolean; saveMsg?: string
 }) {
   return (
     <div className="grid shrink-0 gap-3 md:grid-cols-3">
       <button
         type="button"
         onClick={onSave}
-        className="flex h-[52px] items-center justify-center gap-3 rounded-xl bg-gradient-to-b from-green-500 to-green-700 text-[17px] font-black text-white shadow-[0_12px_28px_rgba(34,197,94,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(34,197,94,0.3)]"
+        disabled={saving}
+        className="flex h-[52px] items-center justify-center gap-3 rounded-xl bg-gradient-to-b from-green-500 to-green-700 text-[17px] font-black text-white shadow-[0_12px_28px_rgba(34,197,94,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(34,197,94,0.3)] disabled:opacity-60"
       >
-        <Save className="h-5 w-5" />
-        保存记录
+        {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />}
+        {saving ? '保存中...' : '保存记录'}
       </button>
+      {saveMsg && <div className="col-span-full text-center text-[13px] font-bold text-green-600">{saveMsg}</div>}
 
       <button
         type="button"

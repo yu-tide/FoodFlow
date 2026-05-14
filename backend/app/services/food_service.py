@@ -188,10 +188,12 @@ async def run_mock_analysis(task_id: str, meal_type: str, remark: str | None = N
                 carb = fusion_result.items[0].carbs if fusion_result and fusion_result.items else 0
                 fat = fusion_result.items[0].fat if fusion_result and fusion_result.items else 0
                 food = fusion_result.items[0].food_name if fusion_result and fusion_result.items else ""
+                est = any(it.estimated for it in fusion_result.items) if fusion_result else False
                 ai_result = generate_summary(
                     food_name=food,
                     total_calories=cal, protein=pro, carbs=carb, fat=fat,
                     meal_type=meal_type, remark=remark, ocr_text=ocr_text or "",
+                    estimated=est,
                 )
                 ai_summary_text = ai_result.text
                 ai_latency_val = ai_result.latency
@@ -216,11 +218,15 @@ async def run_mock_analysis(task_id: str, meal_type: str, remark: str | None = N
 
         # 使用 fusion 结果写入 food_items 和覆盖营养
         if fusion_result and fusion_result.items:
-            fused = fusion_result.items[0]
-            record.total_calories = fused.calories
-            record.protein = fused.protein
-            record.carbohydrate = fused.carbs
-            record.fat = fused.fat
+            # 汇总所有 items
+            total_cal = sum(it.calories for it in fusion_result.items)
+            total_pro = sum(it.protein for it in fusion_result.items)
+            total_carb = sum(it.carbs for it in fusion_result.items)
+            total_fat = sum(it.fat for it in fusion_result.items)
+            record.total_calories = total_cal
+            record.protein = total_pro
+            record.carbohydrate = total_carb
+            record.fat = total_fat
             record.prompt_version = prompt_ver
             await db.commit()
 
@@ -242,7 +248,7 @@ async def run_mock_analysis(task_id: str, meal_type: str, remark: str | None = N
             await db.commit()
             logger.info("task=%s fusion items=%d cal=%d pro=%d fat=%d carb=%d source=%s",
                         task_id, len(fusion_result.items),
-                        fused.calories, fused.protein, fused.carbs, fused.fat, fusion_result.source)
+                        total_cal, total_pro, total_carb, total_fat, fusion_result.source)
         elif parser_result and parser_result.success:
             # fallback: 旧 OCR-only 路径（兼容）
             record.total_calories = parser_result.total_calories
@@ -322,8 +328,12 @@ async def get_food_detail(db: AsyncSession, record_id: str) -> dict:
                 "weight": item.weight,
                 "calories": item.calories,
                 "protein": item.protein,
-                "carbohydrate": item.carbs,  # DB: carbs → API: carbohydrate
+                "carbohydrate": item.carbs,
                 "fat": item.fat,
+                "category": item.category,
+                "confidence": item.confidence,
+                "source": item.source,
+                "estimated": item.estimated,
                 "image_url": item.image_url,
             }
             for item in food_items

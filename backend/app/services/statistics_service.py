@@ -28,7 +28,6 @@ MEAL_LABELS = {
     "snack": "加餐",
 }
 
-TARGET_CALORIES = 2000
 PROTEIN_TARGET = 120
 CARB_TARGET = 250
 
@@ -99,7 +98,7 @@ async def _query_meal_dist(db: AsyncSession, user_id: str, week_days: list[date]
     ]
 
 
-async def _get_week_summary(db: AsyncSession, user_id: str, week_days: list[date]):
+async def _get_week_summary(db: AsyncSession, user_id: str, week_days: list[date], target_calories: int = 2000):
     rows = await _query_week(db, user_id, week_days)
 
     daily_calories = []
@@ -133,7 +132,7 @@ async def _get_week_summary(db: AsyncSession, user_id: str, week_days: list[date
     today_row = rows.get(today_key)
     today_cal = int(today_row.calories) if today_row else 0
 
-    return daily_calories, macro_trend, total_cal, avg_daily, protein_days, carb_days, record_count, avg_meals, max(TARGET_CALORIES - today_cal, -999)
+    return daily_calories, macro_trend, total_cal, avg_daily, protein_days, carb_days, record_count, avg_meals, max(target_calories - today_cal, -999)
 
 
 def _generate_ai_summary(avg_daily: int, protein_days: int, carb_days: int) -> list[str]:
@@ -158,7 +157,7 @@ async def get_weekly_stats(db: AsyncSession, user: User) -> WeeklyStatsResponse:
     week_days = _week_days()
     user_id = str(user.id)
 
-    daily_cal, macro_trend, total_cal, avg_daily, protein_days, carb_days, rec_cnt, avg_meals, today_gap = await _get_week_summary(db, user_id, week_days)
+    daily_cal, macro_trend, total_cal, avg_daily, protein_days, carb_days, rec_cnt, avg_meals, today_gap = await _get_week_summary(db, user_id, week_days, target_calories=user.target_calories or 2000)
     meal_dist = await _query_meal_dist(db, user_id, week_days)
 
     # last week comparison
@@ -179,7 +178,7 @@ async def get_weekly_stats(db: AsyncSession, user: User) -> WeeklyStatsResponse:
 
     return WeeklyStatsResponse(
         week_range=_week_range(week_days),
-        target_calories=TARGET_CALORIES,
+        target_calories=user.target_calories or 2000,
         avg_daily_calories=avg_daily,
         total_calories=total_cal,
         protein_target_days=protein_days,

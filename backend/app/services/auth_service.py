@@ -1,70 +1,35 @@
-import random
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.redis import get_redis
 from app.core.security import hash_password, verify_password, create_access_token
 from app.models.user import User
-
-
-def _generate_code() -> str:
-    return f"{random.randint(0, 999999):06d}"
-
-
-def _code_key(scene: str, phone: str) -> str:
-    return f"sms_code:{scene}:{phone}"
-
-
-def _limit_key(scene: str, phone: str) -> str:
-    return f"sms_code_limit:{scene}:{phone}"
+from app.services.sms_service import send_code as _send_sms, verify_code as _verify_sms
 
 
 async def send_code(db: AsyncSession, phone: str, scene: str) -> dict:
-    """发送验证码，返回 {dev_code} 或空 dict。Redis 不可用时抛异常。"""
-    r = get_redis()
-    if r is None:
-        raise RuntimeError("验证码服务暂不可用")
-
-    # 频控检查
-    limit_key = _limit_key(scene, phone)
-    if r.exists(limit_key):
-        return {"blocked": True}
-
+    """发送验证码。Redis 不可用时抛异常。"""
     # 注册场景检查手机号是否已注册
     if scene == "register":
         result = await db.execute(select(User).where(User.phone == phone))
         if result.scalar_one_or_none() is not None:
             return {"already_registered": True}
 
-    code = _generate_code()
-    code_key = _code_key(scene, phone)
+    sms_result = _send_sms(phone, scene)
+    if not sms_result.success:
+        raise RuntimeError(sms_result.message)
 
-    r.setex(code_key, 300, code)
-    r.setex(limit_key, 60, "1")
-
-    from app.core.config import settings
-
-    if settings.ENVIRONMENT == "development" or settings.DEBUG:
-        return {"dev_code": code}
-
-    return {}
+    response = {"message": sms_result.message}
+    if sms_result.dev_code:
+        response["dev_code"] = sms_result.dev_code
+    if sms_result.blocked:
+        response["blocked"] = True
+    return response
 
 
 async def verify_code(phone: str, scene: str, code: str) -> bool:
     """验证验证码是否正确，验证成功后删除。"""
-    r = get_redis()
-    if r is None:
-        return False
-
-    code_key = _code_key(scene, phone)
-    stored = r.get(code_key)
-
-    if stored is None or stored != code:
-        return False
-
-    r.delete(code_key)
-    return True
+    result = _verify_sms(phone, scene, code)
+    return result.valid
 
 
 async def register_user(db: AsyncSession, phone: str, nickname: str, password: str) -> User:

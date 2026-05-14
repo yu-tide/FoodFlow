@@ -170,7 +170,7 @@ export function adaptFoodDetail(data: FoodDetailRaw): AnalyzeResult {
       fat: item.fat,
       category: item.category ?? 'unknown',
       confidence: item.confidence ?? 0,
-      source: item.source ?? 'ocr',
+      source: item.source || 'unknown',
       estimated: item.estimated ?? false,
       imageUrl: resolveImageUrl(item.image_url),
     })),
