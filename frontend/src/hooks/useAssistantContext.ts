@@ -56,6 +56,8 @@ export function useAssistantContext() {
     const context: Record<string, string> = { page: pathname };
     if (pathname.startsWith("/records/")) {
       context["record_id"] = pathname.split("/")[2] || "";
+    } else if (pathname.startsWith("/confirm/")) {
+      context["record_id"] = pathname.split("/")[2] || "";
     }
     return {
       page: pathname,
