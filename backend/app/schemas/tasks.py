@@ -49,6 +49,7 @@ def estimate_text(status: str, eta_seconds: int | None) -> str:
 class TaskEventItem(BaseModel):
     time: str
     title: str
+    created_at: Optional[datetime] = None
 
 
 class TaskActiveResponse(BaseModel):
@@ -74,6 +75,8 @@ class TaskDetailResponse(BaseModel):
     retry_count: int
     error_message: Optional[str] = None
     record_id: Optional[str] = None
+    is_food_detected: Optional[bool] = None
+    non_food_reason: Optional[str] = None
     events: list[TaskEventItem] = []
 
 

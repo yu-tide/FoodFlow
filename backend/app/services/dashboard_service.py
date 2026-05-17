@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from zoneinfo import ZoneInfo
 
 from app.models.analyze_task import AnalyzeTask
 from app.models.food_record import FoodRecord
@@ -41,6 +42,7 @@ async def _today_food_records(db: AsyncSession, user_id: str):
     result = await db.execute(
         select(FoodRecord).where(
             FoodRecord.user_id == user_id,
+            FoodRecord.status == "confirmed",
             FoodRecord.created_at >= start,
             FoodRecord.created_at < end,
         )
@@ -111,6 +113,7 @@ async def _build_weekly(db: AsyncSession, user_id: str) -> list[WeeklyPoint]:
         )
         .where(
             FoodRecord.user_id == user_id,
+            FoodRecord.status == "confirmed",
             FoodRecord.created_at >= start_dt,
             FoodRecord.created_at < end_dt,
         )
@@ -176,6 +179,7 @@ async def _build_recent_meals(db: AsyncSession, user_id: str) -> list[RecentMeal
     result = await db.execute(
         select(FoodRecord)
         .where(FoodRecord.user_id == user_id)
+        .where(FoodRecord.status == "confirmed")
         .order_by(FoodRecord.created_at.desc())
         .limit(3)
     )
@@ -198,10 +202,50 @@ async def _build_recent_meals(db: AsyncSession, user_id: str) -> list[RecentMeal
     ]
 
 
+async def _compute_streak(db: AsyncSession, user_id: str) -> int:
+    """连续记录天数。非食物记录也计入，同一天去重，遇断档停止。"""
+    tz = ZoneInfo("Asia/Shanghai")
+    result = await db.execute(
+        select(FoodRecord.created_at)
+        .where(FoodRecord.user_id == user_id)
+        .where(FoodRecord.status == "confirmed")
+        .order_by(FoodRecord.created_at.desc())
+    )
+    rows = result.scalars().all()
+
+    record_dates: set[date] = set()
+    for created_at in rows:
+        if created_at is None:
+            continue
+        dt = created_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        record_dates.add(dt.astimezone(tz).date())
+
+    if not record_dates:
+        return 0
+
+    today = datetime.now(tz).date()
+
+    if today in record_dates:
+        cursor = today
+    elif today - timedelta(days=1) in record_dates:
+        cursor = today - timedelta(days=1)
+    else:
+        return 0
+
+    streak = 0
+    while cursor in record_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
 async def get_dashboard_summary(db: AsyncSession, user: User) -> DashboardResponse:
     user_id = str(user.id)
 
     today_records = await _today_food_records(db, user_id)
+    streak = await _compute_streak(db, user_id)
 
     return DashboardResponse(
         user=await _build_user(user),
@@ -210,4 +254,5 @@ async def get_dashboard_summary(db: AsyncSession, user: User) -> DashboardRespon
         weekly=await _build_weekly(db, user_id),
         activeTask=await _build_active_task(db, user_id),
         recentMeals=await _build_recent_meals(db, user_id),
+        streakDays=streak,
     )

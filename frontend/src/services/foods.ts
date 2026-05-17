@@ -15,11 +15,27 @@ export type FoodItemRaw = {
   source?: string | null
   estimated?: boolean | null
   image_url?: string | null
+  dish_family?: string | null
+  alternatives?: Array<{ name: string; confidence?: number | null }> | null
+  user_correction?: string | null
+  components?: Array<{
+    name: string
+    confidence?: number | null
+    estimated_weight_g?: number | null
+    calories?: number | null
+    protein?: number | null
+    carbs?: number | null
+    fat?: number | null
+    role?: string | null
+    include_in_total?: boolean | null
+  }> | null
 }
 
 export type FoodRecordRaw = {
   id: string
+  status?: string | null
   status_label: string
+  confirmed_at?: string | null
   total_calories: number
   protein: number
   carbohydrate: number
@@ -29,6 +45,9 @@ export type FoodRecordRaw = {
   created_at?: string | null
   summary?: string | null
   ocr_text?: string | null
+  is_food_detected?: boolean | null
+  non_food_reason?: string | null
+  analysis_mode?: string | null
 }
 
 export type AiLogRaw = {
@@ -85,11 +104,28 @@ export type FoodItem = {
   source: string
   estimated: boolean
   imageUrl: string
+  includeInTotal?: boolean
+  dishFamily?: string | null
+  alternatives?: Array<{ name: string; confidence?: number | null }> | null
+  userCorrection?: string | null
+  components?: Array<{
+    name: string
+    confidence?: number | null
+    estimatedWeightG?: number | null
+    calories?: number | null
+    protein?: number | null
+    carbs?: number | null
+    fat?: number | null
+    role?: string | null
+    includeInTotal?: boolean | null
+  }> | null
 }
 
 export type AnalyzeResult = {
   id: string
+  status: string
   statusLabel: string
+  analysisMode: string
   totalCalories: number
   remainingCalories: number
   targetCalories: number
@@ -153,7 +189,9 @@ export function adaptFoodDetail(data: FoodDetailRaw): AnalyzeResult {
 
   return {
     id: r.id,
+    status: r.status ?? 'draft',
     statusLabel: r.status_label ?? '分析完成',
+    analysisMode: r.analysis_mode ?? 'dish_with_components',
     totalCalories,
     remainingCalories: Math.max(targetCalories - totalCalories, 0),
     targetCalories,
@@ -173,6 +211,14 @@ export function adaptFoodDetail(data: FoodDetailRaw): AnalyzeResult {
       source: item.source || 'unknown',
       estimated: item.estimated ?? false,
       imageUrl: resolveImageUrl(item.image_url),
+      dishFamily: item.dish_family ?? null,
+      alternatives: item.alternatives?.map((a: Record<string, unknown>) => ({ name: String(a.name || ""), confidence: Number(a.confidence) || null })) ?? null,
+      userCorrection: item.user_correction ?? null,
+      components: item.components?.map(c => ({
+        name: c.name, confidence: c.confidence, estimatedWeightG: c.estimated_weight_g,
+        calories: c.calories, protein: c.protein, carbs: c.carbs, fat: c.fat,
+        role: c.role, includeInTotal: c.include_in_total,
+      })) ?? null,
     })),
     aiSummary: splitSummary(r.summary),
     technical: {

@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy import Boolean, Column, Float, String, Text, Integer, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from app.db.base import Base
 
@@ -28,3 +28,7 @@ class FoodItem(Base):
     estimated = Column(Boolean, default=False, nullable=False)
     image_url = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0)
+    components = Column(JSONB, default=list, nullable=False, server_default="[]")
+    dish_family = Column(String(100), nullable=True)
+    alternatives = Column(JSONB, nullable=True)
+    user_correction = Column(String(200), nullable=True)

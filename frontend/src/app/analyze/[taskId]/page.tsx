@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, usePathname, useRouter } from 'next/navigation'
 import {
+  AlertTriangle,
   ArrowLeft,
   BarChart3,
   Calculator,
@@ -12,7 +13,7 @@ import {
   ChevronDown,
   ClipboardList,
   CloudUpload,
-  Crown,
+
   FileImage,
   FileText,
   Home,
@@ -30,6 +31,8 @@ import {
   Workflow,
   XCircle,
 } from 'lucide-react'
+import AccountMenu from '@/components/user/AccountMenu'
+import ProfileEntry from '@/components/user/ProfileEntry'
 
 type AnalyzeTaskStatus =
   | 'PENDING'
@@ -43,8 +46,13 @@ type AnalyzeTaskStatus =
   | 'FAILED'
 
 type AnalyzeTaskEvent = {
-  time: string
-  title: string
+  id?: string
+  event_type?: string
+  title?: string
+  message?: string
+  status?: string
+  time?: string
+  created_at?: string
 }
 
 type AnalyzeTask = {
@@ -61,6 +69,8 @@ type AnalyzeTask = {
   retry_count?: number
   error_message?: string | null
   record_id?: string | null
+  is_food_detected?: boolean
+  non_food_reason?: string | null
   events?: AnalyzeTaskEvent[]
 }
 
@@ -106,14 +116,14 @@ const workflowSteps: WorkflowStep[] = [
   },
   {
     key: 'OCR_PROCESSING',
-    title: 'OCR 识别中',
-    desc: '正在识别图片中的食物文字',
+    title: '图像识别中',
+    desc: '正在识别图片中的文字与食物内容',
     icon: ScanText,
   },
   {
     key: 'STRUCTURING',
     title: '食物结构化',
-    desc: '将识别文本转换为食物数据',
+    desc: '正在融合识别结果并提取食物、重量和类别信息',
     icon: Utensils,
   },
   {
@@ -145,7 +155,7 @@ const processTips = [
   },
   {
     title: '自动轮询状态',
-    desc: '页面会自动同步 OCR 与 AI 分析进度。',
+    desc: '页面会自动同步图像识别与 AI 分析进度。',
     icon: <RefreshCcw className="h-5 w-5" />,
     tone: 'bg-green-50 text-green-600',
   },
@@ -165,8 +175,8 @@ function getStatusText(status: AnalyzeTaskStatus) {
   const map: Record<AnalyzeTaskStatus, string> = {
     PENDING: '排队中',
     UPLOADED: '图片已上传',
-    OCR_PROCESSING: 'OCR 识别中',
-    OCR_SUCCESS: 'OCR 已完成',
+    OCR_PROCESSING: '图像识别中',
+    OCR_SUCCESS: '图像识别完成',
     STRUCTURING: '食物结构化中',
     CALCULATING: '热量计算中',
     AI_SUMMARIZING: 'AI 总结生成中',
@@ -195,27 +205,128 @@ function getStepIndex(status: AnalyzeTaskStatus) {
 }
 
 function getProgress(status: AnalyzeTaskStatus, fallback?: number) {
-  if (typeof fallback === 'number') return fallback
-
   const map: Partial<Record<AnalyzeTaskStatus, number>> = {
-    PENDING: 10,
-    UPLOADED: 20,
-    OCR_PROCESSING: 35,
-    OCR_SUCCESS: 48,
+    PENDING: 8,
+    UPLOADED: 18,
+    OCR_PROCESSING: 32,
+    OCR_SUCCESS: 45,
     STRUCTURING: 58,
     CALCULATING: 72,
-    AI_SUMMARIZING: 86,
+    AI_SUMMARIZING: 88,
     SUCCESS: 100,
     FAILED: 65,
   }
 
-  return map[status] ?? 35
+  const statusProgress = map[status] ?? 35
+
+  // 后端 progress_percent 有时会滞后或跳跃；前端取较大的阶段基础进度，避免步骤已进入下一阶段但进度条被旧值拖住。
+  if (typeof fallback === 'number') return Math.max(fallback, statusProgress)
+
+  return statusProgress
 }
 
 function formatEta(seconds?: number) {
   if (!seconds) return '15–30 秒'
   if (seconds < 60) return `${seconds} 秒`
   return `${Math.ceil(seconds / 60)} 分钟`
+}
+
+function formatEventTime(value?: string | null) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function getEventTitle(event: AnalyzeTaskEvent) {
+  const byType: Record<string, string> = {
+    image_received: '图片接收完成',
+    image_uploaded: '图片上传完成',
+    image_recognizing: '正在识别图片内容',
+    image_recognized: '图像识别完成',
+    food_structuring: '正在结构化食物信息',
+    nutrition_calculating: '正在计算营养数据',
+    ai_summary_generating: '正在生成 AI 总结',
+    completed: '分析完成',
+    failed: '分析失败',
+  }
+  const raw = (event.event_type ? byType[event.event_type] : '') || event.message || event.title || '任务状态更新'
+  return raw.replace(/OCR\s*识别中/g, '图像识别中').replace(/OCR\s*识别/g, '图像识别').replace(/OCR/g, '图像识别')
+}
+
+
+function inferStatusFromEvents(task: AnalyzeTask): AnalyzeTaskStatus {
+  if (task.status === 'SUCCESS' || task.status === 'FAILED') return task.status
+
+  const eventsText = (task.events || [])
+    .map((event) =>
+      [event.event_type, event.title, event.message, event.status]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join(' ')
+
+  if (!eventsText) return task.status
+
+  if (
+    eventsText.includes('AI 总结') ||
+    eventsText.includes('AI总结') ||
+    eventsText.includes('饮食建议') ||
+    eventsText.includes('总结') ||
+    eventsText.includes('summary') ||
+    eventsText.includes('summarizing')
+  ) {
+    return 'AI_SUMMARIZING'
+  }
+
+  if (
+    eventsText.includes('营养') ||
+    eventsText.includes('热量') ||
+    eventsText.includes('参考检索') ||
+    eventsText.includes('nutrition') ||
+    eventsText.includes('calculating') ||
+    eventsText.includes('calorie')
+  ) {
+    return 'CALCULATING'
+  }
+
+  if (
+    eventsText.includes('结构化') ||
+    eventsText.includes('标准化') ||
+    eventsText.includes('食物名称') ||
+    eventsText.includes('融合识别') ||
+    eventsText.includes('structuring') ||
+    eventsText.includes('normalize')
+  ) {
+    return 'STRUCTURING'
+  }
+
+  if (
+    eventsText.includes('图像识别完成') ||
+    eventsText.includes('识别完成') ||
+    eventsText.includes('recognized')
+  ) {
+    return 'OCR_SUCCESS'
+  }
+
+  if (
+    eventsText.includes('图像识别中') ||
+    eventsText.includes('识别图片') ||
+    eventsText.includes('recognizing')
+  ) {
+    return 'OCR_PROCESSING'
+  }
+
+  if (
+    eventsText.includes('图片上传完成') ||
+    eventsText.includes('图片接收完成') ||
+    eventsText.includes('uploaded') ||
+    eventsText.includes('received')
+  ) {
+    return task.status === 'PENDING' ? 'UPLOADED' : task.status
+  }
+
+  return task.status
 }
 
 export default function AnalyzeTaskPage() {
@@ -237,19 +348,53 @@ export default function AnalyzeTaskPage() {
   const [apiError, setApiError] = useState<string | null>(null)
   const [lastSyncText, setLastSyncText] = useState('刚刚同步')
 
+  const effectiveStatus = useMemo(
+    () => inferStatusFromEvents(task),
+    [task],
+  )
+
   const currentStepIndex = useMemo(
-    () => getStepIndex(task.status),
-    [task.status],
+    () => getStepIndex(effectiveStatus),
+    [effectiveStatus],
   )
 
-  const progress = useMemo(
-    () => getProgress(task.status, task.progress_percent),
-    [task.status, task.progress_percent],
+  const targetProgress = useMemo(
+    () => getProgress(effectiveStatus, task.progress_percent),
+    [effectiveStatus, task.progress_percent],
   )
+  const [displayedProgress, setDisplayedProgress] = useState(0)
 
-  const isFinished = task.status === 'SUCCESS' && !!task.record_id
-  const isFailed = task.status === 'FAILED'
-  const isProcessing = !isFinished && !isFailed
+  useEffect(() => {
+    setDisplayedProgress(0)
+  }, [taskId])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setDisplayedProgress((prev) => {
+        if (targetProgress <= prev) return targetProgress
+
+        const gap = targetProgress - prev
+        const step = gap > 30 ? 5 : gap > 16 ? 3 : gap > 6 ? 2 : 1
+
+        return Math.min(prev + step, targetProgress)
+      })
+    }, 120)
+
+    return () => window.clearInterval(timer)
+  }, [targetProgress])
+
+  const isFinished = effectiveStatus === 'SUCCESS' && !!task.record_id
+  const isFailed = effectiveStatus === 'FAILED'
+
+  const hasNonFoodEvent = task.events?.some((e) => {
+    const text = [e.event_type, e.title, e.message, e.status].filter(Boolean).join(' ')
+    return text.includes('未识别到可分析的食物') || text.includes('未识别到食物') || text.includes('non_food')
+  }) ?? false
+
+  const isNonFood =
+    task.is_food_detected === false || hasNonFoodEvent
+
+  const isProcessing = !isFinished && !isFailed && !isNonFood
 
   const syncTask = useCallback(
     async (silent = false) => {
@@ -355,9 +500,15 @@ export default function AnalyzeTaskPage() {
     return () => window.clearInterval(timer)
   }, [isProcessing, syncTask])
 
-  // SUCCESS + record_id → 判断是否需确认再跳转
+  // SUCCESS + record_id → 判断跳转
   useEffect(() => {
-    if (!isFinished || !task.record_id) return
+    if (!task.record_id) return
+    if (isNonFood) {
+      // 非食物：2.5s 延迟 → 跳 /records
+      const timer = window.setTimeout(() => router.push(`/records/${task.record_id}`), 2500)
+      return () => window.clearTimeout(timer)
+    }
+    if (!isFinished) return
 
     let cancelled = false
     async function decideRedirect() {
@@ -385,7 +536,7 @@ export default function AnalyzeTaskPage() {
     }
     decideRedirect()
     return () => { cancelled = true }
-  }, [isFinished, task.record_id, router])
+  }, [isFinished, isNonFood, task.record_id, router])
 
   return (
     <main className="min-h-screen bg-[#f8faf8] text-slate-950 lg:h-screen lg:overflow-hidden">
@@ -401,29 +552,36 @@ export default function AnalyzeTaskPage() {
                 <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.05fr)]">
                   <UploadedImageCard task={task} taskId={taskId} />
 
-                  <WorkflowCard
-                    task={task}
-                    progress={progress}
-                    currentStepIndex={currentStepIndex}
-                    isFinished={isFinished}
-                    isFailed={isFailed}
-                  />
+                  {isNonFood ? (
+                    <NonFoodWorkflowCard task={task} />
+                  ) : (
+                    <WorkflowCard
+                      task={{ ...task, status: effectiveStatus }}
+                      progress={displayedProgress}
+                      currentStepIndex={currentStepIndex}
+                      isFinished={isFinished}
+                      isFailed={isFailed}
+                    />
+                  )}
                 </div>
 
-                <ActionBar
-                  isFinished={isFinished}
-                  isFailed={isFailed}
-                  isRefreshing={isRefreshing}
-                  task={task}
-                  onBack={() => router.push('/upload')}
-                  onRefresh={() => syncTask(false)}
-                  onRetry={handleRetry}
-                  onViewResult={() => {
-                    if (task.record_id) {
-                      router.push(`/records/${task.record_id}`)
-                    }
-                  }}
-                />
+                {isNonFood ? (
+                  <NonFoodActionBar
+                    onBack={() => router.push('/upload')}
+                    onViewResult={() => { if (task.record_id) router.push(`/records/${task.record_id}`) }}
+                  />
+                ) : (
+                  <ActionBar
+                    isFinished={isFinished}
+                    isFailed={isFailed}
+                    isRefreshing={isRefreshing}
+                    task={task}
+                    onBack={() => router.push('/upload')}
+                    onRefresh={() => syncTask(false)}
+                    onRetry={handleRetry}
+                    onViewResult={() => { if (task.record_id) router.push(`/records/${task.record_id}`) }}
+                  />
+                )}
 
                 <div className="mt-3 flex shrink-0 items-center justify-center gap-2 text-[13px] font-bold text-slate-500">
                   <Lock className="h-4 w-4" />
@@ -433,7 +591,7 @@ export default function AnalyzeTaskPage() {
 
               <aside className="hidden min-h-0 flex-col gap-4 xl:flex">
                 <CurrentStatusCard
-                  task={task}
+                  task={{ ...task, status: effectiveStatus }}
                   isProcessing={isProcessing}
                   isFailed={isFailed}
                   lastSyncText={lastSyncText}
@@ -513,7 +671,7 @@ function UploadedImageCard({
                 图片已进入 AI Workflow
               </div>
               <p className="mt-1 text-[12px] font-semibold leading-5 text-slate-500">
-                系统会依次完成 OCR、食物结构化、热量计算和 AI 总结。
+                系统会依次完成图像识别、食物结构化、热量计算和 AI 总结。
               </p>
             </div>
           </div>
@@ -709,37 +867,43 @@ function CurrentStatusCard({
 function TaskTimelineCard({ task }: { task: AnalyzeTask }) {
   const events = task.events?.length ? task.events : []
 
+  if (events.length === 0) {
+    return (
+      <section className="min-h-0 flex-1 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_14px_34px_rgba(15,23,42,0.055)]">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-[20px] font-black tracking-[-0.04em] text-slate-950">任务动态</h2>
+          <span className="rounded-full bg-green-50 px-3 py-1 text-[12px] font-black text-green-700">实时同步</span>
+        </div>
+        <div className="flex min-h-[160px] flex-col items-center justify-center rounded-xl bg-slate-50 text-center">
+          <TimerReset className="h-8 w-8 text-slate-300" />
+          <div className="mt-3 text-[14px] font-black text-slate-600">暂无真实任务动态</div>
+          <p className="mt-1 text-[12px] font-semibold text-slate-400">后端返回任务事件后会显示真实时间线。</p>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="min-h-0 flex-1 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_14px_34px_rgba(15,23,42,0.055)]">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-[20px] font-black tracking-[-0.04em] text-slate-950">
-          任务动态
-        </h2>
-
-        <span className="rounded-full bg-green-50 px-3 py-1 text-[12px] font-black text-green-700">
-          实时同步
-        </span>
+        <h2 className="text-[20px] font-black tracking-[-0.04em] text-slate-950">任务动态</h2>
+        <span className="rounded-full bg-green-50 px-3 py-1 text-[12px] font-black text-green-700">实时同步</span>
       </div>
-
-      <div className="space-y-4">
-        {events.map((event: AnalyzeTaskEvent, index: number) => (
-          <div key={`${event.time}-${event.title}`} className="flex gap-3">
-            <div className="w-12 shrink-0 pt-0.5 text-right text-[13px] font-bold text-slate-500">
-              {event.time}
+      <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+        {events.map((event: AnalyzeTaskEvent, index: number) => {
+          const eventTime = formatEventTime(event.created_at)
+          const eventTitle = getEventTitle(event)
+          return (
+            <div key={event.id || `${event.created_at || index}-${eventTitle}`} className="flex gap-3">
+              <div className="w-12 shrink-0 pt-0.5 text-right text-[13px] font-bold text-slate-500">{eventTime}</div>
+              <div className="relative flex flex-col items-center">
+                <span className="z-10 mt-1 h-2.5 w-2.5 rounded-full bg-green-500 ring-4 ring-green-50" />
+                {index < events.length - 1 ? <span className="absolute top-4 h-8 w-px bg-green-200" /> : null}
+              </div>
+              <div className="min-w-0 flex-1 break-words text-[14px] font-black leading-5 text-slate-700">{eventTitle}</div>
             </div>
-
-            <div className="relative flex flex-col items-center">
-              <span className="z-10 mt-1 h-2.5 w-2.5 rounded-full bg-green-500 ring-4 ring-green-50" />
-              {index < events.length - 1 ? (
-                <span className="absolute top-4 h-8 w-px bg-green-200" />
-              ) : null}
-            </div>
-
-            <div className="min-w-0 flex-1 text-[14px] font-black text-slate-700">
-              {event.title}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </section>
   )
@@ -926,7 +1090,7 @@ function StatusLine({
 
       <span
         className={cx(
-          'truncate text-[13px] font-black',
+          'min-w-0 truncate text-[13px] font-black',
           tone === 'success' && 'text-green-700',
           tone === 'danger' && 'text-red-500',
           tone === 'default' && 'text-slate-700',
@@ -982,39 +1146,8 @@ function Sidebar({ user }: { user: UserProfile }) {
         />
       </nav>
 
-      <div className="mt-auto space-y-4">
-        <div className="rounded-2xl border border-green-100 bg-gradient-to-br from-green-50 to-white p-4 shadow-[0_18px_45px_rgba(22,101,52,0.08)]">
-          <div className="mb-2 flex items-center gap-2 text-green-700">
-            <Crown className="h-5 w-5 fill-green-100 stroke-[2.4]" />
-            <span className="text-[17px] font-black">升级专业版</span>
-          </div>
-
-          <p className="text-[13px] font-semibold leading-5 text-slate-500">
-            解锁更强的 AI 洞察与个性化目标。
-          </p>
-
-          <button className="mt-3 h-9 w-full rounded-xl border border-green-500 bg-white text-[14px] font-black text-green-700 transition hover:bg-green-50">
-            立即升级
-          </button>
-        </div>
-
-        <button className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_14px_35px_rgba(15,23,42,0.05)] transition hover:bg-slate-50">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[21px] font-black text-white shadow-lg shadow-green-600/20">
-            {user.avatarText}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[16px] font-black text-slate-900">
-              {user.nickname}
-            </div>
-
-            <div className="truncate text-[12px] font-semibold text-slate-500">
-              {user.phone}
-            </div>
-          </div>
-
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-        </button>
+      <div className="mt-auto">
+        <AccountMenu user={user || undefined} />
       </div>
     </aside>
   )
@@ -1115,12 +1248,73 @@ function TopHeader({
           </div>
         </div>
 
-        <button className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[24px] font-black text-white shadow-xl shadow-green-600/20">
-          {user.avatarText}
-        </button>
-
-        <ChevronDown className="h-5 w-5 text-slate-500" />
+        <ProfileEntry user={user || undefined} statusText="状态良好" detailText="点击进入个人中心" />
       </div>
     </header>
+  )
+}
+
+function NonFoodWorkflowCard({ task }: { task: AnalyzeTask }) {
+  const reason = task.non_food_reason
+    || task.events?.find(e => (e.title || '').includes('未识别'))?.title
+    || '图片中未检测到可分析的食物内容。'
+
+  return (
+    <section className="flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_26px_rgba(15,23,42,0.045)]">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[20px] font-black tracking-[-0.04em] text-slate-950">分析进度</h2>
+          <div className="mt-1 text-[13px] font-semibold text-slate-500">AI Workflow 已结束</div>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1.5 text-[12px] font-black text-orange-600">
+          <AlertTriangle className="h-3.5 w-3.5" />未识别到食物
+        </span>
+      </div>
+      <div className="mb-4">
+        <div className="mb-2 flex items-center justify-between text-[13px] font-black">
+          <span className="text-slate-500">整体进度</span><span className="text-slate-700">100%</span>
+        </div>
+        <div className="h-2.5 overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full w-full rounded-full bg-gradient-to-r from-orange-400 to-amber-500" />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-1">
+        {[
+          { title: '图片已上传', done: true, current: false },
+          { title: '图像识别完成', done: true, current: false },
+          { title: '未识别到可分析的食物', done: false, current: true, desc: reason },
+        ].map((step, index) => (
+          <div key={step.title}>
+            <div className={`flex items-center gap-3 rounded-xl p-2.5 transition ${step.current ? 'border border-orange-100 bg-orange-50' : 'bg-white'}`}>
+              <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-full border-4 ${step.done ? 'border-green-100 bg-green-600 text-white' : step.current ? 'border-orange-100 bg-orange-500 text-white' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>
+                {step.done ? <Check className="h-5 w-5 stroke-[3]" /> : step.current ? <AlertTriangle className="h-5 w-5" /> : <span className="text-sm font-bold">{index + 1}</span>}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className={`text-[15px] font-black tracking-[-0.03em] ${step.current ? 'text-orange-700' : step.done ? 'text-slate-950' : 'text-slate-700'}`}>
+                  {index + 1}. {step.title}
+                </div>
+                {step.desc && <div className="mt-0.5 text-[12px] font-semibold text-slate-500">{step.desc}</div>}
+              </div>
+            </div>
+            {index < 2 && <div className="ml-[31px] flex h-4 w-8 items-center justify-center text-[12px] font-black text-slate-300">↓</div>}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function NonFoodActionBar({ onBack, onViewResult }: { onBack: () => void; onViewResult: () => void }) {
+  return (
+    <div className="mt-5 shrink-0">
+      <div className="grid gap-3 lg:grid-cols-2">
+        <button type="button" onClick={onBack} className="flex h-[48px] items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-[15px] font-black text-slate-700 transition hover:bg-slate-50">
+          <ArrowLeft className="h-4 w-4" />返回上传页
+        </button>
+        <button type="button" onClick={onViewResult} className="flex h-[48px] items-center justify-center gap-2 rounded-xl bg-gradient-to-b from-green-500 to-green-700 text-[15px] font-black text-white shadow-[0_14px_30px_rgba(34,197,94,0.25)]">
+          <FileText className="h-4 w-4" />查看识别结果
+        </button>
+      </div>
+    </div>
   )
 }

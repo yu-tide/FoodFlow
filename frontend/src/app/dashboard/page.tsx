@@ -14,7 +14,6 @@ import {
   ClipboardList,
   CloudUpload,
   Coffee,
-  Crown,
   Droplet,
   FileText,
   Home,
@@ -30,6 +29,9 @@ import {
   Wheat,
 } from 'lucide-react'
 import { apiGet, ApiError } from '@/services/api'
+import { useGreeting } from '@/lib/useGreeting'
+import AccountMenu from '@/components/user/AccountMenu'
+import ProfileEntry from '@/components/user/ProfileEntry'
 
 type MacroKey = 'protein' | 'carbs' | 'fat'
 type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'
@@ -298,38 +300,8 @@ function Sidebar({ user }: { user?: UserProfile | null }) {
         />
       </nav>
 
-      <div className="mt-auto space-y-4">
-        <div className="rounded-2xl border border-green-100 bg-gradient-to-br from-green-50 to-white p-4 shadow-[0_18px_45px_rgba(22,101,52,0.08)]">
-          <div className="mb-2 flex items-center gap-2 text-green-700">
-            <Crown className="h-5 w-5 fill-green-100 stroke-[2.4]" />
-            <span className="text-[17px] font-black">升级专业版</span>
-          </div>
-
-          <p className="text-[13px] font-semibold leading-5 text-slate-500">
-            解锁更强的 AI 洞察与个性化目标。
-          </p>
-
-          <button className="mt-3 h-9 w-full rounded-xl border border-green-500 bg-white text-[14px] font-black text-green-700 transition hover:bg-green-50">
-            立即升级
-          </button>
-        </div>
-
-        <button className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_14px_35px_rgba(15,23,42,0.05)] transition hover:bg-slate-50">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[21px] font-black text-white shadow-lg shadow-green-600/20">
-            {user?.avatarText || ''}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[16px] font-black text-slate-900">
-              {user?.nickname || ''}
-            </div>
-            <div className="truncate text-[12px] font-semibold text-slate-500">
-              {user?.phone || ''}
-            </div>
-          </div>
-
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-        </button>
+      <div className="mt-auto">
+        <AccountMenu user={user || undefined} />
       </div>
     </aside>
   )
@@ -376,7 +348,7 @@ function TopHeader({
     <header className="flex shrink-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div>
         <h1 className="flex items-center gap-3 text-[28px] font-black leading-tight tracking-[-0.06em] text-slate-950 sm:text-[34px]">
-          早上好，{user?.nickname || '...'}
+          {useGreeting()}，{user?.nickname || '...'}
           <span className="text-3xl">☀️</span>
         </h1>
 
@@ -405,11 +377,7 @@ function TopHeader({
           </div>
         </div>
 
-        <button className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[24px] font-black text-white shadow-xl shadow-green-600/20">
-          {user?.avatarText || ''}
-        </button>
-
-        <ChevronDown className="h-5 w-5 text-slate-500" />
+        <ProfileEntry user={user || undefined} statusText="加载中" detailText="点击进入个人中心" />
       </div>
     </header>
   )
@@ -418,12 +386,15 @@ function TopHeader({
 function CardShell({
   children,
   className = '',
+  onClick,
 }: {
   children: React.ReactNode
   className?: string
+  onClick?: () => void
 }) {
   return (
     <div
+      onClick={onClick}
       className={`rounded-2xl border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.055)] ${className}`}
     >
       {children}
@@ -574,7 +545,7 @@ function MacroProgressRow({ item }: { item: MacroProgress }) {
 
 function QuickUploadCard({ onUpload }: { onUpload: () => void }) {
   return (
-    <CardShell className="p-5">
+    <CardShell className="cursor-pointer p-5 transition hover:shadow-[0_18px_42px_rgba(15,23,42,0.1)]" onClick={onUpload}>
       <div className="flex items-center gap-3">
         <Sparkles className="h-6 w-6 text-violet-600" />
         <CardTitle title="快捷操作" icon={null} />

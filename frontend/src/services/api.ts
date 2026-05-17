@@ -39,6 +39,23 @@ export async function apiPost<T = unknown>(path: string, body?: unknown): Promis
   return res.json()
 }
 
+export async function apiPatch<T = unknown>(path: string, body?: unknown): Promise<T> {
+  const token = getToken()
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, data.message || data.detail || '请求失败')
+  }
+  return res.json()
+}
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {

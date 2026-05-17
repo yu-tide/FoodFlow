@@ -59,3 +59,4 @@ class DashboardResponse(BaseModel):
     weekly: list[WeeklyPoint]
     activeTask: Optional[ActiveTaskItem] = None
     recentMeals: list[RecentMealItem] = []
+    streakDays: int = 0

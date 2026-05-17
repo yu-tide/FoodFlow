@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
@@ -12,7 +12,7 @@ import {
   ClipboardList,
   CloudUpload,
   Coffee,
-  Crown,
+
   FileText,
   Home,
   ImageIcon,
@@ -29,6 +29,9 @@ import {
   Utensils,
   X,
 } from 'lucide-react'
+import AccountMenu from '@/components/user/AccountMenu'
+import ProfileEntry from '@/components/user/ProfileEntry'
+import { useUploadDraft } from '@/stores/uploadDraftStore'
 
 type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'
 
@@ -121,19 +124,14 @@ export default function UploadPage() {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const [file, setFile] = useState<File | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const { draft, setDraft, clearDraft } = useUploadDraft()
+  const file = draft.file
+  const previewUrl = draft.previewUrl
   const [mealType, setMealType] = useState<MealType>('lunch')
   const [remark, setRemark] = useState('')
   const [uploading, setUploading] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [message, setMessage] = useState<MessageState>(null)
-
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
-    }
-  }, [previewUrl])
 
   const showMessage = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text })
@@ -159,13 +157,7 @@ export default function UploadPage() {
 
   const applySelectedFile = (selected: File) => {
     if (!validateFile(selected)) return
-
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl)
-    }
-
-    setFile(selected)
-    setPreviewUrl(URL.createObjectURL(selected))
+    setDraft(selected, 'file')
     setMessage(null)
   }
 
@@ -188,12 +180,7 @@ export default function UploadPage() {
   }
 
   const handleDelete = () => {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl)
-    }
-
-    setFile(null)
-    setPreviewUrl(null)
+    clearDraft()
   }
 
   const handleUpload = async () => {
@@ -239,6 +226,7 @@ export default function UploadPage() {
         throw new Error('后端未返回 task_id')
       }
 
+      clearDraft()
       showMessage('success', '上传成功，正在进入分析流程')
       router.push(`/analyze/${taskId}`)
     } catch (err: unknown) {
@@ -443,38 +431,8 @@ function Sidebar({ user }: { user: UserProfile }) {
         />
       </nav>
 
-      <div className="mt-auto space-y-4">
-        <div className="rounded-2xl border border-green-100 bg-gradient-to-br from-green-50 to-white p-4 shadow-[0_18px_45px_rgba(22,101,52,0.08)]">
-          <div className="mb-2 flex items-center gap-2 text-green-700">
-            <Crown className="h-5 w-5 fill-green-100 stroke-[2.4]" />
-            <span className="text-[17px] font-black">升级专业版</span>
-          </div>
-
-          <p className="text-[13px] font-semibold leading-5 text-slate-500">
-            解锁更强的 AI 洞察与个性化目标。
-          </p>
-
-          <button className="mt-3 h-9 w-full rounded-xl border border-green-500 bg-white text-[14px] font-black text-green-700 transition hover:bg-green-50">
-            立即升级
-          </button>
-        </div>
-
-        <button className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_14px_35px_rgba(15,23,42,0.05)] transition hover:bg-slate-50">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[21px] font-black text-white shadow-lg shadow-green-600/20">
-            {user.avatarText}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[16px] font-black text-slate-900">
-              {user.nickname}
-            </div>
-            <div className="truncate text-[12px] font-semibold text-slate-500">
-              {user.phone}
-            </div>
-          </div>
-
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-        </button>
+      <div className="mt-auto">
+        <AccountMenu user={user || undefined} />
       </div>
     </aside>
   )
@@ -561,11 +519,7 @@ function TopHeader({ user }: { user: UserProfile }) {
           </div>
         </div>
 
-        <button className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[24px] font-black text-white shadow-xl shadow-green-600/20">
-          {user.avatarText}
-        </button>
-
-        <ChevronDown className="h-5 w-5 text-slate-500" />
+        <ProfileEntry user={user || undefined} statusText="状态良好" detailText="点击进入个人中心" />
       </div>
     </header>
   )

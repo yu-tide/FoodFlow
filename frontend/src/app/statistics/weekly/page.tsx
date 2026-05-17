@@ -1,29 +1,28 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Activity,
   BarChart3,
   Beef,
-  CalendarCheck2,
   CheckCircle2,
-  ChevronDown,
+  ChevronRight,
+  Circle,
   ClipboardList,
-  Crown,
   Download,
   Flame,
   Home,
   Info,
   Leaf,
+  Loader2,
   PieChart as PieChartIcon,
   Settings,
   Sparkles,
-  Target,
   TrendingDown,
   TrendingUp,
   UploadCloud,
-  User,
   Wheat,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -43,6 +42,13 @@ import {
   YAxis,
 } from "recharts";
 import { apiGet, ApiError } from "@/services/api";
+import AccountMenu from "@/components/user/AccountMenu";
+
+type UserProfile = {
+  nickname: string;
+  phone: string;
+  avatarText: string;
+};
 
 type DayCalories = {
   day: string;
@@ -92,15 +98,26 @@ const formatNumber = (value: number) =>
 const classNames = (...classes: Array<string | false | undefined>) =>
   classes.filter(Boolean).join(" ");
 
-// 后端返回 snake_case → 前端 camelCase 适配
+function num(val: unknown, fallback = 0) {
+  return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+}
+
+function arr<T>(val: unknown): T[] {
+  return Array.isArray(val) ? (val as T[]) : [];
+}
+
 function adaptWeeklyStats(raw: Record<string, unknown>): WeeklyStats {
   const r = (key: string) => raw[key] ?? null;
-  const num = (val: unknown, fallback = 0) => (typeof val === "number" ? val : fallback);
-  const arr = <T extends unknown>(val: unknown): T[] => (Array.isArray(val) ? (val as T[]) : []);
+
+  const lastWeek =
+    ((r("last_week_comparison") ?? r("lastWeekComparison") ?? {}) as Record<
+      string,
+      unknown
+    >);
 
   return {
     weekRange: String(r("week_range") ?? r("weekRange") ?? ""),
-    targetCalories: num(r("target_calories") ?? r("targetCalories"), 2000),
+    targetCalories: num(r("target_calories") ?? r("targetCalories")),
     avgDailyCalories: num(r("avg_daily_calories") ?? r("avgDailyCalories")),
     totalCalories: num(r("total_calories") ?? r("totalCalories")),
     proteinTargetDays: num(r("protein_target_days") ?? r("proteinTargetDays")),
@@ -108,67 +125,74 @@ function adaptWeeklyStats(raw: Record<string, unknown>): WeeklyStats {
     recordCount: num(r("record_count") ?? r("recordCount")),
     averageMeals: num(r("average_meals") ?? r("averageMeals")),
     todayGap: num(r("today_gap") ?? r("todayGap")),
-    caloriesTrend: arr<DayCalories>(r("daily_calories") ?? r("caloriesTrend")).map(
-      (d: Record<string, unknown>) => ({
-        day: String(d.day ?? ""),
-        calories: num(d.calories),
-      })
-    ),
-    macroTrend: arr<MacroTrend>(r("macro_trend") ?? r("macroTrend")).map(
-      (d: Record<string, unknown>) => ({
-        day: String(d.day ?? ""),
-        protein: num(d.protein),
-        carbs: num(d.carbs),
-        fat: num(d.fat),
-      })
-    ),
-    mealDistribution: arr<MealDistribution>(r("meal_distribution") ?? r("mealDistribution")).map(
-      (d: Record<string, unknown>) => ({
-        name: String(d.name ?? ""),
-        calories: num(d.calories),
-        color: String(d.color ?? "#16A34A"),
-      })
-    ),
+    caloriesTrend: arr<Record<string, unknown>>(
+      r("daily_calories") ?? r("caloriesTrend"),
+    ).map((d) => ({
+      day: String(d.day ?? ""),
+      calories: num(d.calories),
+    })),
+    macroTrend: arr<Record<string, unknown>>(
+      r("macro_trend") ?? r("macroTrend"),
+    ).map((d) => ({
+      day: String(d.day ?? ""),
+      protein: num(d.protein),
+      carbs: num(d.carbs),
+      fat: num(d.fat),
+    })),
+    mealDistribution: arr<Record<string, unknown>>(
+      r("meal_distribution") ?? r("mealDistribution"),
+    ).map((d) => ({
+      name: String(d.name ?? ""),
+      calories: num(d.calories),
+      color: String(d.color ?? "#16A34A"),
+    })),
     lastWeekComparison: {
       avgCaloriesDeltaPct: num(
-        (r("last_week_comparison") as Record<string, unknown> | null)?.avg_calories_delta_pct ??
-        (r("lastWeekComparison") as Record<string, unknown> | null)?.avgCaloriesDeltaPct
+        lastWeek.avg_calories_delta_pct ?? lastWeek.avgCaloriesDeltaPct,
       ),
       proteinDeltaPct: num(
-        (r("last_week_comparison") as Record<string, unknown> | null)?.protein_delta_pct ??
-        (r("lastWeekComparison") as Record<string, unknown> | null)?.proteinDeltaPct
+        lastWeek.protein_delta_pct ?? lastWeek.proteinDeltaPct,
       ),
       recordDeltaDays: num(
-        (r("last_week_comparison") as Record<string, unknown> | null)?.record_delta_days ??
-        (r("lastWeekComparison") as Record<string, unknown> | null)?.recordDeltaDays
+        lastWeek.record_delta_days ?? lastWeek.recordDeltaDays,
       ),
       avgCaloriesLastWeek: num(
-        (r("last_week_comparison") as Record<string, unknown> | null)?.avg_calories_last_week ??
-        (r("lastWeekComparison") as Record<string, unknown> | null)?.avgCaloriesLastWeek
+        lastWeek.avg_calories_last_week ?? lastWeek.avgCaloriesLastWeek,
       ),
       proteinLastWeek: num(
-        (r("last_week_comparison") as Record<string, unknown> | null)?.protein_last_week ??
-        (r("lastWeekComparison") as Record<string, unknown> | null)?.proteinLastWeek
+        lastWeek.protein_last_week ?? lastWeek.proteinLastWeek,
       ),
       recordDaysLastWeek: num(
-        (r("last_week_comparison") as Record<string, unknown> | null)?.record_days_last_week ??
-        (r("lastWeekComparison") as Record<string, unknown> | null)?.recordDaysLastWeek
+        lastWeek.record_days_last_week ?? lastWeek.recordDaysLastWeek,
       ),
     },
-    aiSummary: arr<string>(r("ai_summary") ?? r("aiSummary") ?? r("summary_items")).map(String),
+    aiSummary: arr<string>(
+      r("ai_summary") ?? r("aiSummary") ?? r("summary_items"),
+    ).map(String),
   };
 }
 
-function getUserProfile() {
-  if (typeof window === "undefined") return { nickname: "", phone: "", avatarText: "" };
+function getUserProfile(): UserProfile {
+  if (typeof window === "undefined") {
+    return { nickname: "", phone: "", avatarText: "" };
+  }
+
   try {
     const raw = localStorage.getItem("user");
     if (raw) {
       const u = JSON.parse(raw);
-      return { nickname: u.nickname || "", phone: u.phone || "", avatarText: u.avatarText || u.nickname?.[0] || "" };
+      const nickname = u.nickname || "";
+      return {
+        nickname,
+        phone: u.phone || "",
+        avatarText: u.avatarText || nickname?.[0] || "我",
+      };
     }
-  } catch { /* ignore */ }
-  return { nickname: "", phone: "", avatarText: "" };
+  } catch {
+    // ignore
+  }
+
+  return { nickname: "", phone: "", avatarText: "我" };
 }
 
 export default function WeeklyStatisticsPage() {
@@ -176,13 +200,17 @@ export default function WeeklyStatisticsPage() {
   const [stats, setStats] = useState<WeeklyStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [user] = useState(getUserProfile);
+  const [user] = useState<UserProfile>(() => getUserProfile());
 
   useEffect(() => {
     let mounted = true;
+
     async function load() {
       try {
-        const raw = await apiGet<Record<string, unknown>>("/api/statistics/weekly");
+        const raw = await apiGet<Record<string, unknown>>(
+          "/api/statistics/weekly",
+        );
+
         if (mounted) {
           setStats(adaptWeeklyStats(raw));
           setError(null);
@@ -196,292 +224,352 @@ export default function WeeklyStatisticsPage() {
               router.push("/login");
               return;
             }
+
             setError(err.message);
+          } else if (err instanceof TypeError && err.message.includes("fetch")) {
+            setError("后端服务不可用，请确认已启动 uvicorn");
           } else {
             setError("数据加载失败");
           }
         }
       } finally {
-        if (mounted) setIsLoading(false);
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     }
+
     load();
-    return () => { mounted = false; };
+
+    return () => {
+      mounted = false;
+    };
   }, [router]);
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#FBFDF9]">
-        <p className="text-sm font-bold text-slate-500">加载中...</p>
-      </div>
+      <WeeklyPageShell user={user} todayGap={null} isLoading>
+        <div className="flex flex-1 items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-green-600" />
+            <p className="mt-3 text-[15px] font-bold text-slate-500">
+              正在加载每周统计...
+            </p>
+          </div>
+        </div>
+      </WeeklyPageShell>
     );
   }
 
   if (error || !stats) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#FBFDF9]">
-        <div className="text-center">
-          <Info className="mx-auto h-8 w-8 text-slate-300" />
-          <p className="mt-3 text-sm font-bold text-slate-500">{error || "暂无数据"}</p>
+      <WeeklyPageShell user={user} todayGap={null} isLoading={false}>
+        <div className="flex flex-1 items-center justify-center">
+          <div className="text-center">
+            <Circle className="mx-auto h-10 w-10 text-slate-300" />
+            <p className="mt-3 text-[15px] font-bold text-slate-500">
+              {error || "暂无每周统计数据"}
+            </p>
+          </div>
         </div>
-      </div>
+      </WeeklyPageShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#FBFDF9] text-slate-950">
-      <div className="flex min-h-screen">
-        <Sidebar user={user} />
+    <WeeklyPageShell
+      user={user}
+      todayGap={stats.todayGap}
+      isLoading={isLoading}
+    >
+      <div className="mt-4 min-h-0 flex-1 overflow-y-auto pb-6 pr-1">
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <KpiCard
+            icon={Flame}
+            tone="green"
+            title="平均每日热量"
+            value={formatNumber(stats.avgDailyCalories)}
+            suffix="kcal"
+            description={
+              stats.targetCalories > 0
+                ? `目标 ${formatNumber(stats.targetCalories)} kcal`
+                : "目标未设置"
+            }
+          />
+          <KpiCard
+            icon={Beef}
+            tone="emerald"
+            title="蛋白质达标"
+            value={`${stats.proteinTargetDays} / 7`}
+            suffix="天"
+            description={`达标率 ${Math.round(
+              (stats.proteinTargetDays / 7) * 100,
+            )}%`}
+          />
+          <KpiCard
+            icon={Wheat}
+            tone="orange"
+            title="高碳水天数"
+            value={stats.highCarbDays}
+            suffix="天"
+            description={`占比 ${Math.round((stats.highCarbDays / 7) * 100)}%`}
+          />
+          <KpiCard
+            icon={ClipboardList}
+            tone="purple"
+            title="本周记录"
+            value={stats.recordCount}
+            suffix="餐"
+            description={`平均每日 ${stats.averageMeals} 餐`}
+          />
+        </section>
 
-        <main className="min-w-0 flex-1 px-4 pb-28 pt-6 sm:px-6 lg:px-10 lg:py-8">
-          <div className="mx-auto max-w-[1220px]">
-            <PageHeader
-              todayGap={stats.todayGap}
-              isLoading={isLoading}
-            />
-
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <KpiCard
-                icon={Flame}
-                tone="green"
-                title="平均每日热量"
-                value={formatNumber(stats.avgDailyCalories)}
-                suffix="kcal"
-                description={`目标 ${formatNumber(stats.targetCalories)} kcal`}
-              />
-              <KpiCard
-                icon={Beef}
-                tone="emerald"
-                title="蛋白质达标"
-                value={`${stats.proteinTargetDays} / 7`}
-                suffix="天"
-                description={`达标率 ${Math.round(
-                  (stats.proteinTargetDays / 7) * 100
-                )}%`}
-              />
-              <KpiCard
-                icon={Wheat}
-                tone="orange"
-                title="高碳水天数"
-                value={stats.highCarbDays}
-                suffix="天"
-                description={`占比 ${Math.round(
-                  (stats.highCarbDays / 7) * 100
-                )}%`}
-              />
-              <KpiCard
-                icon={ClipboardList}
-                tone="purple"
-                title="本周记录"
-                value={stats.recordCount}
-                suffix="餐"
-                description={`平均每日 ${stats.averageMeals} 餐`}
-              />
-            </section>
-
-            <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-              <div className="xl:col-span-6">
-                <CaloriesBarChartCard stats={stats} />
-              </div>
-
-              <div className="xl:col-span-6">
-                <MacroTrendChartCard stats={stats} />
-              </div>
-            </section>
-
-            <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-              <div className="xl:col-span-4">
-                <MealDistributionCard stats={stats} />
-              </div>
-
-              <div className="xl:col-span-3">
-                <LastWeekComparisonCard stats={stats} />
-              </div>
-
-              <div className="xl:col-span-5">
-                <AiWeeklySummaryCard stats={stats} />
-              </div>
-            </section>
-
-            <section className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => downloadWeeklyReport(stats)}
-                className="group flex h-14 items-center justify-center gap-3 rounded-2xl border border-green-200 bg-white text-sm font-semibold text-green-700 shadow-sm transition hover:border-green-300 hover:bg-green-50"
-              >
-                <Download className="h-5 w-5 transition group-hover:-translate-y-0.5" />
-                导出周报
-              </button>
-
-              <Link
-                href="/records"
-                className="group flex h-14 items-center justify-center gap-3 rounded-2xl bg-green-600 text-sm font-semibold text-white shadow-[0_18px_40px_rgba(22,163,74,0.25)] transition hover:bg-green-700"
-              >
-                <ClipboardList className="h-5 w-5 transition group-hover:-translate-y-0.5" />
-                查看全部记录
-              </Link>
-            </section>
+        <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
+          <div className="xl:col-span-6">
+            <CaloriesBarChartCard stats={stats} />
           </div>
-        </main>
-      </div>
 
-      <MobileTabBar />
-    </div>
+          <div className="xl:col-span-6">
+            <MacroTrendChartCard stats={stats} />
+          </div>
+        </section>
+
+        <section className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
+          <div className="xl:col-span-4">
+            <MealDistributionCard stats={stats} />
+          </div>
+
+          <div className="xl:col-span-3">
+            <LastWeekComparisonCard stats={stats} />
+          </div>
+
+          <div className="xl:col-span-5">
+            <AiWeeklySummaryCard stats={stats} />
+          </div>
+        </section>
+
+        <section className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => downloadWeeklyReport(stats)}
+            className="group flex h-14 items-center justify-center gap-3 rounded-2xl border border-green-200 bg-white text-[15px] font-black text-green-700 shadow-[0_12px_30px_rgba(15,23,42,0.055)] transition hover:border-green-300 hover:bg-green-50"
+          >
+            <Download className="h-5 w-5 transition group-hover:-translate-y-0.5" />
+            导出周报
+          </button>
+
+          <Link
+            href="/records"
+            className="group flex h-14 items-center justify-center gap-3 rounded-2xl bg-green-600 text-[15px] font-black text-white shadow-[0_18px_40px_rgba(22,163,74,0.25)] transition hover:bg-green-700"
+          >
+            <ClipboardList className="h-5 w-5 transition group-hover:-translate-y-0.5" />
+            查看全部记录
+          </Link>
+        </section>
+      </div>
+    </WeeklyPageShell>
   );
 }
 
-function PageHeader({
+function WeeklyPageShell({
+  user,
+  todayGap,
+  isLoading,
+  children,
+}: {
+  user: UserProfile;
+  todayGap: number | null;
+  isLoading: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <main className="min-h-screen bg-[#f8faf8] text-slate-950 lg:h-screen lg:overflow-hidden">
+      <div className="grid min-h-screen grid-cols-1 lg:h-screen lg:grid-cols-[220px_minmax(0,1fr)]">
+        <Sidebar user={user} />
+
+        <section className="min-w-0 bg-white lg:h-screen lg:overflow-hidden">
+          <div className="mx-auto flex min-h-screen w-full max-w-[1480px] flex-col px-5 py-4 sm:px-6 lg:h-screen lg:min-h-0 lg:px-7">
+            <WeeklyPageHeader
+              user={user}
+              todayGap={todayGap}
+              isLoading={isLoading}
+            />
+
+            {children}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function WeeklyPageHeader({
+  user,
   todayGap,
   isLoading,
 }: {
-  todayGap: number;
+  user: UserProfile;
+  todayGap: number | null;
   isLoading: boolean;
 }) {
+  const router = useRouter();
+
+  const gapText =
+    todayGap === null
+      ? "正在加载今日目标"
+      : todayGap > 0
+        ? `你今天还差 ${formatNumber(todayGap)} kcal 达标`
+        : todayGap === 0
+          ? "你今天刚好达标"
+          : `你今天已超出 ${formatNumber(Math.abs(todayGap))} kcal`;
+
+  const statusText =
+    isLoading || todayGap === null
+      ? "加载中"
+      : todayGap < 0
+        ? "今日摄入偏高"
+        : todayGap === 0
+          ? "今日刚好达标"
+          : "状态良好";
+
   return (
-    <header className="mb-7 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <header className="flex shrink-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div>
-        <h1 className="text-3xl font-black tracking-tight text-slate-950">
+        <h1 className="text-[28px] font-black leading-tight tracking-[-0.06em] text-slate-950 sm:text-[34px]">
           每周统计
         </h1>
-        <p className="mt-2 text-sm font-medium text-slate-500">
+
+        <p className="mt-1.5 text-[15px] font-semibold text-slate-500">
           查看你本周的热量趋势、宏量营养变化与 AI 周复盘。
         </p>
-
-        {isLoading && (
-          <div className="mt-3">
-            <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
-              数据同步中...
-            </span>
-          </div>
-        )}
       </div>
 
-      <div className="flex flex-col items-start gap-2 lg:items-end">
-        <div className="flex items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1.5 text-xs font-bold text-green-700">
-            <CheckCircle2 className="h-4 w-4" />
-            状态良好
-          </span>
+      <button
+        type="button"
+        onClick={() => router.push("/profile")}
+        className="flex items-center gap-4 rounded-2xl px-2 py-1 text-left transition hover:bg-slate-50"
+      >
+        <div className="text-right">
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-green-50 px-3.5 py-1.5 text-[14px] font-black text-green-700">
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4" />
+            )}
+            {statusText}
+          </div>
 
-          <button
-            type="button"
-            className="flex items-center gap-2 rounded-full bg-white px-2 py-1 shadow-sm ring-1 ring-slate-100"
-          >
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-green-600 text-base font-bold text-white shadow-[0_12px_24px_rgba(22,163,74,0.24)]">
-              A
-            </span>
-            <ChevronDown className="h-4 w-4 text-slate-400" />
-          </button>
+          <div className="text-[14px] font-semibold text-slate-500">
+            {gapText}
+          </div>
         </div>
 
-        <p className="text-sm font-semibold text-slate-500">
-          你今天还差{" "}
-          <span className="font-black text-slate-700">{todayGap}</span> kcal 达标
-        </p>
-      </div>
+        <div className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[24px] font-black text-white shadow-xl shadow-green-600/20">
+          {user.avatarText || user.nickname?.[0] || "我"}
+        </div>
+      </button>
     </header>
   );
 }
 
-function Sidebar({ user }: { user: { nickname: string; phone: string; avatarText: string } }) {
-  const items: Array<{
-    label: string;
-    href: string;
-    icon: LucideIcon;
-    active?: boolean;
-  }> = [
-    { label: "首页", href: "/dashboard", icon: Home },
-    { label: "上传", href: "/upload", icon: UploadCloud },
-    { label: "记录", href: "/records", icon: ClipboardList },
-    {
-      label: "每周统计",
-      href: "/statistics/weekly",
-      icon: BarChart3,
-      active: true,
-    },
-    { label: "设置", href: "/settings", icon: Settings },
-  ];
-
+function AppLogo() {
   return (
-    <aside className="sticky top-0 hidden h-screen w-[276px] shrink-0 flex-col border-r border-slate-100 bg-white px-5 py-7 lg:flex">
-      <Link href="/dashboard" className="mb-8 flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-green-50 text-green-600">
-          <Leaf className="h-7 w-7" />
-        </span>
-        <span className="text-2xl font-black tracking-tight text-green-600">
-          FoodFlow
-        </span>
-      </Link>
+    <Link href="/dashboard" className="flex items-center gap-2.5">
+      <div className="relative h-9 w-9 text-green-600">
+        <Leaf className="absolute left-1 top-2 h-6 w-6 -rotate-[28deg] fill-green-500/15 stroke-[2.8]" />
+        <Leaf className="absolute left-3.5 top-0 h-7 w-7 rotate-[22deg] fill-green-500/15 stroke-[2.8]" />
+        <Leaf className="absolute left-[17px] top-[19px] h-5 w-5 rotate-[70deg] fill-green-500/15 stroke-[2.8]" />
+      </div>
 
-      <nav className="space-y-2">
-        {items.map((item) => (
-          <SidebarItem key={item.href} {...item} />
-        ))}
+      <span className="text-[24px] font-black tracking-[-0.04em] text-green-700">
+        FoodFlow
+      </span>
+    </Link>
+  );
+}
+
+function Sidebar({ user }: { user: UserProfile }) {
+  return (
+    <aside className="hidden h-screen overflow-hidden border-r border-slate-200 bg-white px-4 py-5 lg:flex lg:flex-col">
+      <AppLogo />
+
+      <nav className="mt-7 space-y-2">
+        <SidebarItem
+          href="/dashboard"
+          icon={<Home className="h-5 w-5" />}
+          label="首页"
+        />
+        <SidebarItem
+          href="/upload"
+          icon={<UploadCloud className="h-5 w-5" />}
+          label="上传"
+        />
+        <SidebarItem
+          href="/records"
+          icon={<ClipboardList className="h-5 w-5" />}
+          label="记录"
+        />
+        <SidebarItem
+          href="/statistics/weekly"
+          active
+          icon={<BarChart3 className="h-5 w-5" />}
+          label="每周统计"
+        />
+        <SidebarItem
+          href="/settings"
+          icon={<Settings className="h-5 w-5" />}
+          label="设置"
+        />
       </nav>
 
-      <div className="mt-auto space-y-4">
-        <div className="rounded-3xl border border-green-100 bg-gradient-to-br from-green-50 via-white to-green-50 p-4 shadow-sm">
-          <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-2xl bg-green-100 text-green-700">
-            <Crown className="h-5 w-5" />
-          </div>
-          <h3 className="text-base font-black text-green-700">升级专业版</h3>
-          <p className="mt-2 text-sm leading-6 text-slate-500">
-            解锁更强的 AI 洞察与个性化目标。
-          </p>
-          <button
-            type="button"
-            className="mt-4 h-10 w-full rounded-xl border border-green-300 bg-white text-sm font-bold text-green-700 transition hover:bg-green-50"
-          >
-            立即升级
-          </button>
-        </div>
-
-        <button
-          type="button"
-          className="flex w-full items-center gap-3 rounded-3xl border border-slate-100 bg-white p-3 text-left shadow-sm transition hover:bg-slate-50"
-        >
-          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-green-600 text-base font-bold text-white">
-            {user.avatarText || user.nickname?.[0] || ""}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-black text-slate-800">
-              {user.nickname || ""}
-            </span>
-            <span className="block truncate text-xs font-medium text-slate-400">
-              {user.phone || ""}
-            </span>
-          </span>
-          <ChevronDown className="h-4 w-4 text-slate-400" />
-        </button>
+      <div className="mt-auto">
+        <AccountMenu user={user || undefined} />
       </div>
     </aside>
   );
 }
 
 function SidebarItem({
-  label,
   href,
-  icon: Icon,
+  icon,
+  label,
   active,
 }: {
-  label: string;
   href: string;
-  icon: LucideIcon;
+  icon: React.ReactNode;
+  label: string;
   active?: boolean;
 }) {
   return (
     <Link
       href={href}
-      className={classNames(
-        "flex h-13 items-center gap-3 rounded-2xl px-4 py-3 text-sm font-bold transition",
+      className={`flex h-[48px] items-center gap-4 rounded-xl px-4 text-[16px] font-black transition ${
         active
-          ? "bg-green-50 text-green-700 shadow-sm"
-          : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-      )}
+          ? "bg-green-50 text-green-700 shadow-[inset_0_0_0_1px_rgba(34,197,94,0.08)]"
+          : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+      }`}
     >
-      <Icon className="h-5 w-5" />
+      <span className={active ? "text-green-600" : "text-slate-500"}>
+        {icon}
+      </span>
       {label}
     </Link>
+  );
+}
+
+function CardShell({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <article
+      className={`rounded-2xl border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.055)] ${className}`}
+    >
+      {children}
+    </article>
   );
 }
 
@@ -508,33 +596,33 @@ function KpiCard({
   }[tone];
 
   return (
-    <article className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_34px_rgba(15,23,42,0.045)]">
+    <CardShell className="p-5">
       <div className="flex items-center gap-4">
         <div
           className={classNames(
             "flex h-12 w-12 items-center justify-center rounded-full",
-            toneClass
+            toneClass,
           )}
         >
           <Icon className="h-6 w-6" />
         </div>
 
         <div className="min-w-0">
-          <p className="text-sm font-black text-slate-700">{title}</p>
+          <p className="text-[15px] font-black text-slate-700">{title}</p>
           <div className="mt-1 flex items-end gap-2">
-            <span className="text-2xl font-black tracking-tight text-slate-950">
+            <span className="text-[26px] font-black tracking-[-0.06em] text-slate-950">
               {value}
             </span>
-            <span className="pb-1 text-sm font-bold text-slate-600">
+            <span className="pb-1 text-[14px] font-bold text-slate-600">
               {suffix}
             </span>
           </div>
-          <p className="mt-1 text-sm font-semibold text-slate-400">
+          <p className="mt-1 text-[14px] font-semibold text-slate-400">
             {description}
           </p>
         </div>
       </div>
-    </article>
+    </CardShell>
   );
 }
 
@@ -550,21 +638,27 @@ function ChartCard({
   right?: React.ReactNode;
 }) {
   return (
-    <article className="h-full rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_14px_34px_rgba(15,23,42,0.045)]">
+    <CardShell className="h-full p-5">
       <div className="mb-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          {Icon && <Icon className="h-5 w-5 text-green-600" />}
-          <h2 className="text-lg font-black text-slate-900">{title}</h2>
+          {Icon ? <Icon className="h-5 w-5 text-green-600" /> : null}
+          <h2 className="text-[19px] font-black tracking-[-0.04em] text-slate-950">
+            {title}
+          </h2>
           <Info className="h-4 w-4 text-slate-300" />
         </div>
+
         {right}
       </div>
+
       {children}
-    </article>
+    </CardShell>
   );
 }
 
 function CaloriesBarChartCard({ stats }: { stats: WeeklyStats }) {
+  const showTarget = stats.targetCalories > 0;
+
   return (
     <ChartCard title="每日热量趋势" icon={BarChart3}>
       <div className="h-[250px] w-full">
@@ -590,24 +684,33 @@ function CaloriesBarChartCard({ stats }: { stats: WeeklyStats }) {
               cursor={{ fill: "rgba(22, 163, 74, 0.08)" }}
               content={<ChartTooltip unit="kcal" />}
             />
-            <ReferenceLine
-              y={stats.targetCalories}
-              stroke="#94A3B8"
-              strokeDasharray="4 4"
-              label={{
-                value: `目标 ${formatNumber(stats.targetCalories)}`,
-                position: "right",
-                fill: "#475569",
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            />
-            <Bar dataKey="calories" name="热量" barSize={28} radius={[12, 12, 0, 0]}>
+            {showTarget ? (
+              <ReferenceLine
+                y={stats.targetCalories}
+                stroke="#94A3B8"
+                strokeDasharray="4 4"
+                label={{
+                  value: `目标 ${formatNumber(stats.targetCalories)}`,
+                  position: "right",
+                  fill: "#475569",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              />
+            ) : null}
+            <Bar
+              dataKey="calories"
+              name="热量"
+              barSize={28}
+              radius={[12, 12, 0, 0]}
+            >
               {stats.caloriesTrend.map((item) => (
                 <Cell
                   key={item.day}
                   fill={
-                    item.calories > stats.targetCalories ? "#22C55E" : "#16A34A"
+                    showTarget && item.calories > stats.targetCalories
+                      ? "#22C55E"
+                      : "#16A34A"
                   }
                 />
               ))}
@@ -689,64 +792,75 @@ function MacroTrendChartCard({ stats }: { stats: WeeklyStats }) {
 function MealDistributionCard({ stats }: { stats: WeeklyStats }) {
   const total = useMemo(
     () => stats.mealDistribution.reduce((sum, item) => sum + item.calories, 0),
-    [stats.mealDistribution]
+    [stats.mealDistribution],
   );
 
   return (
     <ChartCard title="餐别热量分布" icon={PieChartIcon}>
-      <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[170px_1fr] xl:grid-cols-1 2xl:grid-cols-[170px_1fr]">
-        <div className="relative h-[170px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={stats.mealDistribution}
-                dataKey="calories"
-                innerRadius={52}
-                outerRadius={80}
-                paddingAngle={1}
-                stroke="none"
-              >
-                {stats.mealDistribution.map((item) => (
-                  <Cell key={item.name} fill={item.color} />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
+      {stats.mealDistribution.length === 0 ? (
+        <EmptyCardText text="暂无餐别分布数据" />
+      ) : (
+        <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[170px_1fr] xl:grid-cols-1 2xl:grid-cols-[170px_1fr]">
+          <div className="relative h-[170px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={stats.mealDistribution}
+                  dataKey="calories"
+                  innerRadius={52}
+                  outerRadius={80}
+                  paddingAngle={1}
+                  stroke="none"
+                >
+                  {stats.mealDistribution.map((item) => (
+                    <Cell key={item.name} fill={item.color} />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
 
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-xl font-black text-slate-950">
-                {formatNumber(total)}
-              </div>
-              <div className="mt-0.5 text-xs font-bold text-slate-500">kcal</div>
-              <div className="text-xs font-semibold text-slate-400">总摄入</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          {stats.mealDistribution.map((item) => {
-            const percent = total ? ((item.calories / total) * 100).toFixed(1) : "0";
-            return (
-              <div key={item.name} className="flex items-start gap-3">
-                <span
-                  className="mt-1.5 h-3 w-3 shrink-0 rounded-full"
-                  style={{ backgroundColor: item.color }}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-black text-slate-700">
-                    {item.name}
-                  </div>
-                  <div className="mt-0.5 text-sm font-semibold text-slate-500">
-                    {formatNumber(item.calories)} kcal{" "}
-                    <span className="text-slate-400">({percent}%)</span>
-                  </div>
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="text-center">
+                <div className="text-xl font-black text-slate-950">
+                  {formatNumber(total)}
+                </div>
+                <div className="mt-0.5 text-xs font-bold text-slate-500">
+                  kcal
+                </div>
+                <div className="text-xs font-semibold text-slate-400">
+                  总摄入
                 </div>
               </div>
-            );
-          })}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {stats.mealDistribution.map((item) => {
+              const percent = total
+                ? ((item.calories / total) * 100).toFixed(1)
+                : "0";
+
+              return (
+                <div key={item.name} className="flex items-start gap-3">
+                  <span
+                    className="mt-1.5 h-3 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-black text-slate-700">
+                      {item.name}
+                    </div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-500">
+                      {formatNumber(item.calories)} kcal{" "}
+                      <span className="text-slate-400">({percent}%)</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
     </ChartCard>
   );
 }
@@ -757,7 +871,7 @@ function LastWeekComparisonCard({ stats }: { stats: WeeklyStats }) {
       label: "平均热量",
       value: `${stats.lastWeekComparison.avgCaloriesDeltaPct}%`,
       description: `较上周 ${formatNumber(
-        stats.lastWeekComparison.avgCaloriesLastWeek
+        stats.lastWeekComparison.avgCaloriesLastWeek,
       )} kcal`,
       icon: TrendingDown,
       positive: stats.lastWeekComparison.avgCaloriesDeltaPct < 0,
@@ -786,7 +900,7 @@ function LastWeekComparisonCard({ stats }: { stats: WeeklyStats }) {
             key={item.label}
             className={classNames(
               "flex items-center gap-3 py-4",
-              index !== items.length - 1 && "border-b border-slate-100"
+              index !== items.length - 1 && "border-b border-slate-100",
             )}
           >
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-green-50 text-green-600">
@@ -805,7 +919,7 @@ function LastWeekComparisonCard({ stats }: { stats: WeeklyStats }) {
             <div
               className={classNames(
                 "text-lg font-black",
-                item.positive ? "text-green-600" : "text-orange-500"
+                item.positive ? "text-green-600" : "text-orange-500",
               )}
             >
               {item.value}
@@ -835,28 +949,40 @@ function AiWeeklySummaryCard({ stats }: { stats: WeeklyStats }) {
         </span>
       }
     >
-      <div className="space-y-4">
-        {stats.aiSummary.map((item, index) => (
-          <div key={item} className="flex items-start gap-3">
-            <div
-              className={classNames(
-                "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
-                iconStyles[index % iconStyles.length]
-              )}
-            >
-              {index === 0 && <CheckCircle2 className="h-5 w-5" />}
-              {index === 1 && <Beef className="h-5 w-5" />}
-              {index === 2 && <Wheat className="h-5 w-5" />}
-              {index === 3 && <Sparkles className="h-5 w-5" />}
-            </div>
+      {stats.aiSummary.length === 0 ? (
+        <EmptyCardText text="暂无 AI 周总结" />
+      ) : (
+        <div className="space-y-4">
+          {stats.aiSummary.map((item, index) => (
+            <div key={`${item}-${index}`} className="flex items-start gap-3">
+              <div
+                className={classNames(
+                  "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                  iconStyles[index % iconStyles.length],
+                )}
+              >
+                {index === 0 && <CheckCircle2 className="h-5 w-5" />}
+                {index === 1 && <Beef className="h-5 w-5" />}
+                {index === 2 && <Wheat className="h-5 w-5" />}
+                {index >= 3 && <Sparkles className="h-5 w-5" />}
+              </div>
 
-            <p className="text-sm font-semibold leading-7 text-slate-600">
-              {item}
-            </p>
-          </div>
-        ))}
-      </div>
+              <p className="text-sm font-semibold leading-7 text-slate-600">
+                {item}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
     </ChartCard>
+  );
+}
+
+function EmptyCardText({ text }: { text: string }) {
+  return (
+    <div className="flex min-h-[150px] items-center justify-center rounded-xl bg-slate-50 text-center text-sm font-bold text-slate-400">
+      {text}
+    </div>
   );
 }
 
@@ -914,41 +1040,6 @@ function ChartTooltip({
         ))}
       </div>
     </div>
-  );
-}
-
-function MobileTabBar() {
-  const tabs: Array<{
-    label: string;
-    href: string;
-    icon: LucideIcon;
-    active?: boolean;
-  }> = [
-    { label: "首页", href: "/dashboard", icon: Home },
-    { label: "上传", href: "/upload", icon: UploadCloud },
-    { label: "记录", href: "/records", icon: ClipboardList },
-    { label: "统计", href: "/statistics/weekly", icon: BarChart3, active: true },
-    { label: "我的", href: "/settings", icon: User },
-  ];
-
-  return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-100 bg-white/95 px-2 pb-3 pt-2 shadow-[0_-12px_30px_rgba(15,23,42,0.06)] backdrop-blur lg:hidden">
-      <div className="mx-auto grid max-w-md grid-cols-5">
-        {tabs.map((tab) => (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            className={classNames(
-              "flex flex-col items-center justify-center gap-1 rounded-2xl py-2 text-xs font-bold transition",
-              tab.active ? "text-green-600" : "text-slate-400"
-            )}
-          >
-            <tab.icon className="h-5 w-5" />
-            {tab.label}
-          </Link>
-        ))}
-      </div>
-    </nav>
   );
 }
 

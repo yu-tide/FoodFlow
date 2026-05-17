@@ -6,14 +6,16 @@ import { useParams, useRouter } from 'next/navigation'
 import {
   AlertCircle,
   ArrowLeft,
+  BadgeCheck,
   BarChart3,
+  Circle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   ClipboardList,
   CloudUpload,
   Code2,
-  Crown,
+
   Download,
   Droplet,
   Home,
@@ -30,6 +32,8 @@ import {
   Target,
   Wheat,
 } from 'lucide-react'
+import AccountMenu from '@/components/user/AccountMenu'
+import ProfileEntry from '@/components/user/ProfileEntry';
 import { ApiError } from '@/services/api'
 import { formatFoodItemLabels } from '@/lib/foodLabels'
 import { getFoodRecord, type AnalyzeResult, type FoodItem, type MacroInfo } from '@/services/foods'
@@ -159,12 +163,12 @@ export default function RecordDetailPage() {
       const res = await fetch(`${API_BASE}/api/foods/${recordId}/confirm`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ items: foodItems.map(it => ({ id: it.id, food_name: it.name, weight: it.weight, category: it.category || 'unknown', calories: it.calories, protein: it.protein, carbs: it.carbs, fat: it.fat })) }),
+        body: '{}',
       })
       if (res.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); router.push('/login'); return }
       if (!res.ok) throw new Error('保存失败')
       setSaveMsg('保存成功')
-      loadRecord()
+      router.push('/records')
     } catch {
       setSaveMsg('保存失败，请重试')
     } finally { setSaving(false) }
@@ -203,6 +207,36 @@ export default function RecordDetailPage() {
         </div>
       )
     }
+    const isNonFood = result.foodItems.length === 0 && result.totalCalories === 0
+
+    if (isNonFood) {
+      const isConfirmed = result?.status === 'confirmed'
+      return (
+        <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="flex min-h-0 flex-col items-center justify-center gap-4 rounded-2xl border border-slate-200 bg-white p-10 text-center">
+            <Circle className="h-12 w-12 text-slate-300" />
+            <h2 className="text-xl font-black text-slate-700">未识别到可分析的食物</h2>
+            <p className="max-w-md text-sm font-semibold text-slate-500">{result?.aiSummary?.[0] || '这张图片可能不包含食物，或食物内容不够清晰，暂时无法生成营养估算。'}</p>
+            <p className="text-xs font-bold text-slate-400">状态：{isConfirmed ? '已保存' : '待确认'}</p>
+            <div className="flex gap-3">
+              {!isConfirmed && (
+                <button onClick={handleSaveRecord} disabled={saving} className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60">
+                  {saving ? '保存中...' : '保存这次记录'}
+                </button>
+              )}
+              <button onClick={handleReAnalyze} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">重新上传</button>
+              <Link href="/records" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">返回记录</Link>
+            </div>
+            {saveMsg && <p className="text-[13px] font-bold text-green-600">{saveMsg}</p>}
+          </div>
+          <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
+            <MealImageCard imageUrl={result.imageUrl} />
+            {result.aiSummary.length > 0 && <AiSummaryCard summary={result.aiSummary} />}
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
@@ -210,8 +244,11 @@ export default function RecordDetailPage() {
             <CalorieResultCard result={result} />
             <MacroResultCard macros={result.macros} />
           </div>
-          <FoodItemsCard items={foodItems} onItemsChange={setFoodItems} />
-          <ActionBar onSave={handleSaveRecord} onReAnalyze={handleReAnalyze} onExport={handleExport} saving={saving} saveMsg={saveMsg} />
+          {result.analysisMode === "dish_with_components" || result.analysisMode === "whole_dish"
+            ? <DishWithComponentsResult result={result} recordId={recordId} readOnly={result?.status === 'confirmed'} />
+            : <FoodItemsCard items={foodItems} onItemsChange={setFoodItems} readOnly={result?.status === 'confirmed'} recordId={recordId} />
+          }
+          <ActionBar onSave={handleSaveRecord} onReAnalyze={handleReAnalyze} onExport={handleExport} confirmed={result?.status === 'confirmed'} saving={saving} saveMsg={saveMsg} />
         </div>
         <div className="flex min-h-0 flex-col gap-4 overflow-hidden">
           <MealImageCard imageUrl={result.imageUrl} />
@@ -294,37 +331,8 @@ function Sidebar({ user }: { user: UserProfile }) {
       </nav>
 
       <div className="mt-auto space-y-4">
-        <div className="rounded-2xl border border-green-100 bg-gradient-to-br from-green-50 to-white p-4 shadow-[0_18px_45px_rgba(22,101,52,0.08)]">
-          <div className="mb-2 flex items-center gap-2 text-green-700">
-            <Crown className="h-5 w-5 fill-green-100 stroke-[2.4]" />
-            <span className="text-[17px] font-black">升级专业版</span>
-          </div>
 
-          <p className="text-[13px] font-semibold leading-5 text-slate-500">
-            解锁更强的 AI 洞察与个性化目标。
-          </p>
-
-          <button className="mt-3 h-9 w-full rounded-xl border border-green-500 bg-white text-[14px] font-black text-green-700 transition hover:bg-green-50">
-            立即升级
-          </button>
-        </div>
-
-        <button className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_14px_35px_rgba(15,23,42,0.05)] transition hover:bg-slate-50">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[21px] font-black text-white shadow-lg shadow-green-600/20">
-            {user.avatarText}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[16px] font-black text-slate-900">
-              {user.nickname}
-            </div>
-            <div className="truncate text-[12px] font-semibold text-slate-500">
-              {user.phone}
-            </div>
-          </div>
-
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-        </button>
+        <AccountMenu user={user || undefined} />
       </div>
     </aside>
   )
@@ -384,13 +392,15 @@ function TopHeader({
           分析结果
           <span className="text-3xl">🥗</span>
 
-          <span className="inline-flex items-center gap-2 rounded-full bg-green-50 px-3.5 py-1.5 text-[14px] font-black tracking-normal text-green-700">
+          <span className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[14px] font-black tracking-normal ${result?.status === 'confirmed' ? 'bg-green-50 text-green-700' : 'bg-orange-50 text-orange-600'}`}>
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
+            ) : result?.status === 'confirmed' ? (
               <CheckCircle2 className="h-4 w-4" />
+            ) : (
+              <AlertCircle className="h-4 w-4" />
             )}
-            {loading ? '读取中' : result?.statusLabel ?? '加载中'}
+            {loading ? '读取中' : result?.status === 'confirmed' ? (result?.statusLabel ?? '已确认') : '待确认'}
           </span>
         </h1>
 
@@ -421,11 +431,7 @@ function TopHeader({
           </div>
         </div>
 
-        <button className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[24px] font-black text-white shadow-xl shadow-green-600/20">
-          {user.avatarText}
-        </button>
-
-        <ChevronDown className="h-5 w-5 text-slate-500" />
+        <ProfileEntry user={user || undefined} statusText="状态良好" detailText="点击进入个人中心" />
       </div>
     </header>
   )
@@ -465,11 +471,13 @@ function CardTitle({
 }
 
 function CalorieResultCard({ result }: { result: AnalyzeResult }) {
-  const percent = clampPercent(
-    Math.round((result.totalCalories / result.targetCalories) * 100),
-  )
+  const rawPercent =
+    result.targetCalories > 0
+      ? Math.round((result.totalCalories / result.targetCalories) * 100)
+      : 0
 
-  const degrees = Math.round((percent / 100) * 360)
+  const progressPercent = clampPercent(rawPercent)
+  const degrees = Math.round((progressPercent / 100) * 360)
 
   return (
     <CardShell className="flex h-[224px] flex-col p-5">
@@ -486,7 +494,7 @@ function CalorieResultCard({ result }: { result: AnalyzeResult }) {
 
           <div className="relative text-center">
             <div className="text-[27px] font-black tracking-[-0.06em] text-slate-950">
-              {result.totalCalories}
+              {result.totalCalories.toLocaleString()}
             </div>
             <div className="mt-0.5 text-[12px] font-black text-slate-500">
               kcal
@@ -496,8 +504,8 @@ function CalorieResultCard({ result }: { result: AnalyzeResult }) {
       </div>
 
       <div className="mt-auto grid grid-cols-2 border-t border-slate-100 pt-3">
-        <div>
-          <div className="text-[21px] font-black leading-none tracking-[-0.05em] text-orange-500">
+        <div className="min-w-0">
+          <div className="truncate text-[21px] font-black leading-none tracking-[-0.05em] text-orange-500">
             {result.remainingCalories.toLocaleString()}
           </div>
           <div className="mt-1 text-[12px] font-black text-slate-500">
@@ -505,8 +513,8 @@ function CalorieResultCard({ result }: { result: AnalyzeResult }) {
           </div>
         </div>
 
-        <div className="text-right">
-          <div className="text-[21px] font-black leading-none tracking-[-0.05em] text-slate-700">
+        <div className="min-w-0 text-right">
+          <div className="truncate text-[21px] font-black leading-none tracking-[-0.05em] text-slate-700">
             {result.targetCalories.toLocaleString()}
           </div>
           <div className="mt-1 text-[12px] font-black text-slate-500">
@@ -544,6 +552,10 @@ function MacroResultCard({ macros }: { macros: MacroInfo[] }) {
 
 function MacroProgressRow({ item }: { item: MacroInfo }) {
   const tone = macroToneMap[item.key]
+  const rawPercent = item.target > 0 ? Math.round((item.value / item.target) * 100) : 0
+  const progressPercent = clampPercent(rawPercent)
+  const isOver = rawPercent > 100
+  const overAmount = Math.max(0, Math.round((item.value - item.target) * 10) / 10)
 
   return (
     <div className="grid grid-cols-[42px_minmax(0,1fr)] items-center gap-3">
@@ -559,15 +571,15 @@ function MacroProgressRow({ item }: { item: MacroInfo }) {
             {item.label}
           </div>
 
-          <div className="whitespace-nowrap text-[14px] font-bold text-slate-500">
+          <div className="min-w-0 whitespace-nowrap text-right text-[14px] font-bold text-slate-500">
             <span className="font-black text-slate-700">
               {item.value}
               {item.unit}
             </span>{' '}
             / {item.target}
             {item.unit}
-            <span className="ml-3 font-black text-slate-600">
-              {item.percent}%
+            <span className={`ml-3 font-black ${isOver ? 'text-orange-600' : 'text-slate-600'}`}>
+              {rawPercent}%
             </span>
           </div>
         </div>
@@ -575,15 +587,177 @@ function MacroProgressRow({ item }: { item: MacroInfo }) {
         <div className="h-2.5 overflow-hidden rounded-full bg-slate-200">
           <div
             className={`h-full rounded-full ${tone.barClassName}`}
-            style={{ width: `${clampPercent(item.percent)}%` }}
+            style={{ width: `${progressPercent}%` }}
           />
         </div>
+
+        {isOver ? (
+          <div className="mt-1 text-right text-[11px] font-black text-orange-600">
+            已超标 {overAmount}{item.unit}
+          </div>
+        ) : null}
       </div>
     </div>
   )
 }
 
-function FoodItemsCard({ items, onItemsChange }: { items: FoodItem[]; onItemsChange: (items: FoodItem[]) => void }) {
+
+function DishWithComponentsResult({
+  result,
+  recordId,
+  readOnly,
+}: {
+  result: AnalyzeResult;
+  recordId?: string;
+  readOnly?: boolean;
+}) {
+  const dishItem = result.foodItems[0];
+  const components = dishItem?.components && dishItem.components.length > 0
+    ? dishItem.components
+    : [];
+  const hasComponents = components.length > 0;
+  // When components present: totals from components sum. When empty: fallback to dishItem stored values.
+  const totalWeight = hasComponents
+    ? components.reduce((s, c) => s + (c.estimatedWeightG ?? 0), 0)
+    : (parseFloat(dishItem?.weight || "0") || 0);
+  const totalCal = hasComponents
+    ? components.reduce((s, c) => s + (c.calories ?? 0), 0)
+    : (dishItem?.calories ?? 0);
+  const totalProtein = hasComponents
+    ? components.reduce((s, c) => s + (c.protein ?? 0), 0)
+    : (dishItem?.protein ?? 0);
+  const totalCarbs = hasComponents
+    ? components.reduce((s, c) => s + (c.carbs ?? 0), 0)
+    : (dishItem?.carbs ?? 0);
+  const totalFat = hasComponents
+    ? components.reduce((s, c) => s + (c.fat ?? 0), 0)
+    : (dishItem?.fat ?? 0);
+
+  return (
+    <CardShell className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
+      {/* Dish summary card */}
+      <div className="mb-4 flex items-start justify-between gap-4 rounded-2xl border border-green-200 bg-green-50/50 p-5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            <span className="rounded-full bg-green-100 px-2.5 py-1 text-[11px] font-black text-green-700">识别为</span>
+            <span className="text-[22px] font-black tracking-[-0.04em] text-slate-900">{dishItem?.userCorrection || dishItem?.name || "未知"}</span>
+            {dishItem?.userCorrection && (
+              <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-bold text-violet-600">用户校正</span>
+            )}
+          </div>
+          {dishItem?.dishFamily && (
+            <div className="mt-2 text-[12px] font-bold text-slate-500">菜系家族：{dishItem.dishFamily}</div>
+          )}
+          {(() => {
+            const primary = dishItem?.userCorrection || dishItem?.name || "";
+            const family = dishItem?.dishFamily ?? "";
+            const aiNames = (dishItem?.alternatives ?? []).map((a: { name: string }) => a.name);
+            const familyFallback: Record<string, string[]> = {
+              "川式红汤混合菜": ["冒菜", "麻辣烫", "麻辣香锅", "火锅", "串串香"],
+              "干锅炒制类": ["麻辣香锅", "干锅菜", "香辣炒菜"],
+              "米饭盖浇类": ["盖饭", "烩饭", "拌饭", "咖喱饭", "卤肉饭"],
+              "炒饭炒面类": ["炒饭", "蛋炒饭", "炒面", "炒粉"],
+              "汤面粉类": ["牛肉面", "拉面", "米线", "酸辣粉", "螺蛳粉"],
+            };
+            const all = [primary, ...aiNames, ...(familyFallback[family] ?? [])];
+            const deduped = [...new Set(all.filter(Boolean))];
+            const others = deduped.filter(n => n !== primary);
+            const highAmbiguity = new Set(["川式红汤混合菜", "干锅炒制类", "米饭盖浇类", "炒饭炒面类", "汤面粉类"]);
+            const show = others.length > 0 && (highAmbiguity.has(family) || (dishItem?.confidence ?? 0) < 0.9);
+            if (!show) return null;
+            return (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-bold text-amber-600">相似候选：</span>
+                {others.map((name) => (
+                  <span key={name} className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-600">{name}</span>
+                ))}
+              </div>
+            );
+          })()}
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="min-w-0 rounded-xl bg-white/85 px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
+              <div className="truncate text-[14px] font-black text-slate-700">{Math.round(totalWeight)}g</div>
+              <div className="mt-0.5 text-[10px] font-black text-slate-400">重量</div>
+            </div>
+            <div className="min-w-0 rounded-xl bg-white/85 px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
+              <div className="truncate text-[14px] font-black text-orange-500">{Math.round(totalCal)} kcal</div>
+              <div className="mt-0.5 text-[10px] font-black text-slate-400">热量</div>
+            </div>
+            <div className="min-w-0 rounded-xl bg-white/85 px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
+              <div className="truncate text-[14px] font-black text-green-600">{Math.round(totalProtein)}g</div>
+              <div className="mt-0.5 text-[10px] font-black text-slate-400">蛋白质</div>
+            </div>
+            <div className="min-w-0 rounded-xl bg-white/85 px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
+              <div className="truncate text-[14px] font-black text-orange-500">{Math.round(totalCarbs)}g</div>
+              <div className="mt-0.5 text-[10px] font-black text-slate-400">碳水</div>
+            </div>
+            <div className="min-w-0 rounded-xl bg-white/85 px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.035)]">
+              <div className="truncate text-[14px] font-black text-violet-600">{Math.round(totalFat)}g</div>
+              <div className="mt-0.5 text-[10px] font-black text-slate-400">脂肪</div>
+            </div>
+          </div>
+        </div>
+        {!readOnly && (
+          <Link href={`/confirm/${recordId}`} className="flex h-9 shrink-0 items-center gap-2 rounded-xl border border-green-200 bg-white px-4 text-[13px] font-black text-green-700 transition hover:bg-green-100">
+            <PencilLine className="h-4 w-4" />编辑
+          </Link>
+        )}
+      </div>
+
+      {/* Components table */}
+      {!hasComponents && (
+        <div className="mb-4 flex items-center gap-3 rounded-xl bg-amber-50 px-4 py-3 text-[13px] font-bold text-amber-700">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          未获取到成分明细，当前显示为 AI 估算值。请进入编辑页补充成分以精确计算营养。
+        </div>
+      )}
+      <div className="mb-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <ClipboardList className="h-5 w-5 text-green-600" />
+          <h2 className="text-[17px] font-black tracking-[-0.04em] text-slate-950">成分明细</h2>
+          <span className="text-[11px] font-bold text-slate-400">这些成分共同构成本餐，汇总后计入总热量</span>
+        </div>
+        <span className="rounded-full bg-green-50 px-3 py-1 text-[12px] font-black text-green-700">{components.length} 项成分</span>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-100">
+        <div className="grid h-10 shrink-0 grid-cols-[minmax(110px,1.2fr)_80px_80px_56px_72px] items-center bg-slate-50 px-3 text-[13px] font-black text-slate-500">
+          <div>成分</div><div>重量</div><div>热量</div><div>置信度</div><div>来源</div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {components.map((c, ci) => {
+            const hasWeight = c.estimatedWeightG != null && c.estimatedWeightG > 0;
+            const hasCal = c.calories != null && c.calories > 0;
+            const sourceLabel = c.confidence && c.confidence >= 0.5 ? "AI识别" : "估算";
+            return (
+              <div key={ci} className="grid min-h-[40px] grid-cols-[minmax(110px,1.2fr)_80px_80px_56px_72px] items-center border-t border-slate-100 px-3 text-[13px]">
+                <div className="truncate font-black text-slate-800">{c.name}</div>
+                <div className="font-bold text-slate-500 tabular-nums">{hasWeight ? `${Math.round(c.estimatedWeightG ?? 0)}g` : "-"}</div>
+                <div className="font-bold text-orange-500 tabular-nums">{hasCal ? `${Math.round(c.calories ?? 0)}kcal` : "-"}</div>
+                <div>
+                  <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">{Math.round((c.confidence ?? 0) * 100)}%</span>
+                </div>
+                <div>
+                  <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">{sourceLabel}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Totals summary */}
+      <div className="mt-3 flex items-center gap-4 rounded-xl bg-slate-50 px-4 py-3 text-[13px]">
+        <span className="font-black text-slate-700">成分合计</span>
+        <span className="font-bold text-slate-600">{Math.round(totalWeight)}g</span>
+        <span className="font-bold text-orange-500">{Math.round(totalCal)} kcal</span>
+        <span className="ml-auto text-[11px] font-bold text-green-600">已计入本餐总量</span>
+      </div>
+    </CardShell>
+  );
+}
+
+function FoodItemsCard({ items, onItemsChange, readOnly = false, recordId }: { items: FoodItem[]; onItemsChange: (items: FoodItem[]) => void; readOnly?: boolean; recordId?: string }) {
   const [adding, setAdding] = useState(false)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [newItem, setNewItem] = useState<Partial<FoodItem>>({})
@@ -594,7 +768,7 @@ function FoodItemsCard({ items, onItemsChange }: { items: FoodItem[]; onItemsCha
   const confirmAdd = () => {
     if (!newItem.name?.trim()) return
     const id = "new-" + Date.now()
-    onItemsChange([...items, { id, name: newItem.name || "", weight: newItem.weight || "", calories: Number(newItem.calories) || 0, protein: Number(newItem.protein) || 0, carbs: Number(newItem.carbs) || 0, fat: Number(newItem.fat) || 0, category: newItem.category || "unknown", source: "manual", estimated: false, confidence: 1, imageUrl: "" }])
+    onItemsChange([...items, { id, name: newItem.name || "", weight: newItem.weight || "", calories: Number(newItem.calories) || 0, protein: Number(newItem.protein) || 0, carbs: Number(newItem.carbs) || 0, fat: Number(newItem.fat) || 0, category: newItem.category || "unknown", source: "manual", estimated: false, confidence: 1, imageUrl: "", components: null }])
     setAdding(false); setNewItem({})
   }
 
@@ -615,6 +789,7 @@ function FoodItemsCard({ items, onItemsChange }: { items: FoodItem[]; onItemsCha
       source: "manual",
       estimated: false,
       confidence: 1,
+      components: it.components ?? null,
     } : it)
     onItemsChange(updated)
     setEditingIndex(null); setEditDraft({})
@@ -624,9 +799,12 @@ function FoodItemsCard({ items, onItemsChange }: { items: FoodItem[]; onItemsCha
     <CardShell className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
       <div className="mb-3 flex shrink-0 items-center justify-between gap-4">
         <CardTitle title="识别食物明细" icon={<ClipboardList className="h-5 w-5 text-green-600" />} />
+        {/* 分析结果页只展示结果；修改入口使用每行铅笔图标进入 /confirm/{id}。 */}
+        {false && !readOnly && (
         <button onClick={startAdd} className="flex h-9 items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-3 text-[14px] font-black text-green-700 transition hover:bg-green-100">
           <Plus className="h-4 w-4" />添加
         </button>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-100">
@@ -665,9 +843,11 @@ function FoodItemsCard({ items, onItemsChange }: { items: FoodItem[]; onItemsCha
                   <div className="font-bold text-slate-500">{item.carbs}g</div>
                   <div className="font-bold text-slate-500">{item.fat}g</div>
                   <div className="text-right">
-                    <button onClick={() => startEdit(index)} className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-green-700 transition hover:bg-green-50">
+                    {!readOnly && (
+                    <Link href={`/confirm/${recordId}`} className="inline-flex h-8 items-center justify-center rounded-lg px-2 text-green-700 transition hover:bg-green-50" onClick={() => console.log("[records edit target]", { recordId, target: `/confirm/${recordId}` })}>
                       <PencilLine className="h-4 w-4" />
-                    </button>
+                    </Link>
+                    )}
                   </div>
                 </>
               )}
@@ -837,27 +1017,21 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 function ActionBar({
   onSave, onReAnalyze, onExport,
+  confirmed = false,
   saving = false, saveMsg = "",
 }: {
   onSave: () => void; onReAnalyze: () => void; onExport: () => void
-  saving?: boolean; saveMsg?: string
+  confirmed?: boolean; saving?: boolean; saveMsg?: string
 }) {
   return (
     <div className="grid shrink-0 gap-3 md:grid-cols-3">
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={saving}
-        className="flex h-[52px] items-center justify-center gap-3 rounded-xl bg-gradient-to-b from-green-500 to-green-700 text-[17px] font-black text-white shadow-[0_12px_28px_rgba(34,197,94,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(34,197,94,0.3)] disabled:opacity-60"
+      <button type="button" onClick={onSave} disabled={saving || confirmed}
+        className={`flex h-[52px] items-center justify-center gap-3 rounded-xl text-[17px] font-black text-white shadow-[0_12px_28px_rgba(34,197,94,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(34,197,94,0.3)] disabled:opacity-60 disabled:hover:translate-y-0 ${confirmed ? 'bg-gradient-to-b from-slate-400 to-slate-500' : 'bg-gradient-to-b from-green-500 to-green-700'}`}
       >
-        {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />}
-        {saving ? '保存中...' : '保存记录'}
+        {saving ? <Loader2 className="h-5 w-5 animate-spin" /> : confirmed ? <BadgeCheck className="h-5 w-5" /> : <Save className="h-5 w-5" />}
+        {saving ? '保存中...' : confirmed ? '已保存' : '保存记录'}
       </button>
-      {saveMsg && <div className="col-span-full text-center text-[13px] font-bold text-green-600">{saveMsg}</div>}
-
-      <button
-        type="button"
-        onClick={onReAnalyze}
+      <button type="button" onClick={onReAnalyze}
         className="flex h-[52px] items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white text-[16px] font-black text-slate-600 shadow-[0_12px_30px_rgba(15,23,42,0.045)] transition hover:bg-slate-50"
       >
         <RotateCcw className="h-5 w-5" />
@@ -872,6 +1046,8 @@ function ActionBar({
         <Download className="h-5 w-5" />
         导出结果
       </button>
+
+      {saveMsg && <div className="col-span-full text-center text-[13px] font-bold text-green-600">{saveMsg}</div>}
     </div>
   )
 }

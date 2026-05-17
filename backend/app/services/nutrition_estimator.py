@@ -1,58 +1,181 @@
-"""营养估算引擎 — 基于小型内置规则库"""
+"""营养估算器 — 多源估算，保证未知食物不为零"""
 import logging
 from dataclasses import dataclass
 
+from app.schemas.ai_food import NutritionEstimateResult, NutritionReference, RecognizedFoodItem
+from app.services.food_normalizer import normalize_food_name
+from app.services.nutrition_retriever import retrieve_nutrition_references
+
 logger = logging.getLogger(__name__)
 
-# 每 100g 的营养值 (calories, protein, carbs, fat)
-_NUTRITION_PER_100G: dict[str, tuple[float, float, float, float]] = {
-    "米饭":     (116, 2.6,  25.9, 0.3),
-    "白米饭":   (116, 2.6,  25.9, 0.3),
-    "鸡胸肉":   (133, 31.0, 0.0,  1.2),
-    "牛肉":     (250, 26.0, 0.0,  15.0),
-    "猪肉":     (242, 27.0, 0.0,  14.0),
-    "鸡蛋":     (144, 13.0, 1.0,  10.0),
-    "鱼":       (105, 18.0, 0.0,  3.0),
-    "鱼肉":     (105, 18.0, 0.0,  3.0),
-    "三文鱼":   (208, 20.0, 0.0,  13.0),
-    "豆腐":     (76,  8.0,  1.9,  4.8),
-    "西兰花":   (34,  2.8,  7.0,  0.4),
-    "青菜":     (20,  1.7,  3.0,  0.3),
-    "菠菜":     (23,  2.9,  3.6,  0.4),
-    "番茄":     (18,  0.9,  3.9,  0.2),
-    "胡萝卜":   (41,  0.9,  10.0, 0.2),
-    "白菜":     (13,  1.5,  2.2,  0.2),
-    "生菜":     (15,  1.4,  2.9,  0.2),
-    "土豆":     (77,  2.0,  17.0, 0.1),
-    "面条":     (138, 4.5,  28.0, 0.7),
-    "馒头":     (223, 7.0,  44.0, 1.0),
-    "面包":     (265, 9.0,  49.0, 3.2),
-    "汉堡":     (295, 17.0, 32.0, 12.0),
-    "薯条":     (312, 3.4,  41.0, 15.0),
-    "烤肉":     (200, 20.0, 2.0,  12.0),
-    "鸡肉":     (167, 25.0, 0.0,  7.0),
-    "鸭肉":     (200, 18.0, 0.0,  14.0),
-    "羊肉":     (220, 20.0, 0.0,  15.0),
-    "炸鸡":     (290, 24.0, 12.0, 17.0),
-    "奶茶":     (70,  0.8,  12.0, 2.0),
-    "咖啡":     (1,   0.1,  0.0,  0.0),
-    "可乐":     (42,  0.0,  10.6, 0.0),
-    "果汁":     (45,  0.7,  10.0, 0.2),
-    "薯片":     (536, 7.0,  53.0, 34.0),
-    "饼干":     (433, 6.0,  63.0, 17.0),
-    "蛋糕":     (350, 4.0,  45.0, 16.0),
-    "冰淇淋":   (207, 3.5,  24.0, 11.0),
-}
-
-# 按份估算 (per serving)
-_SERVING_NUTRITION: dict[str, tuple[float, float, float, float, str]] = {
-    "鸡胸肉饭": (520, 36.0, 65.0, 12.0, "1份"),
-    "牛肉饭":   (650, 40.0, 70.0, 18.0, "1份"),
-    "便当":     (600, 30.0, 65.0, 20.0, "1份"),
-    "套餐":     (650, 35.0, 70.0, 22.0, "1份"),
+# 类别兜底 (per 100g): (calories, protein, carbs, fat)
+_CATEGORY_FALLBACK_PER_100G: dict[str, tuple[float, float, float, float]] = {
+    "主食": (150, 4.0, 28.0, 2.0),
+    "蛋白质": (180, 22.0, 1.0, 10.0),
+    "蔬菜": (35, 2.0, 5.0, 0.5),
+    "饮品": (50, 1.5, 8.0, 1.5),
+    "混合菜": (160, 9.0, 15.0, 8.0),
+    "主食混合菜": (170, 8.0, 22.0, 6.0),
+    "零食": (400, 6.0, 50.0, 20.0),
+    "含糖饮品": (50, 1.5, 8.0, 1.5),
+    "混合套餐": (160, 9.0, 18.0, 7.0),
 }
 
 
+def _vision_has_nutrition(item: RecognizedFoodItem) -> bool:
+    """判断 Vision AI 是否已返回完整营养数据"""
+    vals = [item.calories, item.protein, item.carbs, item.fat]
+    return all(v is not None for v in vals) and sum(vals) > 0
+
+
+def _estimate_from_references(
+    weight_g: float,
+    refs: list[NutritionReference],
+) -> NutritionEstimateResult | None:
+    """从检索参考中加权估算营养"""
+    if not refs or weight_g <= 0:
+        return None
+
+    best = refs[0]
+    vals = [best.calories_per_100g, best.protein_per_100g, best.carbs_per_100g, best.fat_per_100g]
+    if not all(v is not None and v >= 0 for v in vals):
+        return None
+
+    scale = weight_g / 100.0
+    cals, prot, carb, fat = [float(v or 0) * scale for v in vals]
+    if cals <= 0:
+        return None
+
+    return NutritionEstimateResult(
+        calories=round(cals, 1),
+        protein=round(prot, 1),
+        carbs=round(carb, 1),
+        fat=round(fat, 1),
+        estimated_weight_g=weight_g,
+        confidence=best.confidence,
+        source="rag",
+        estimated=True,
+        reasoning=f"基于{best.name}参考数据，{weight_g:.0f}g 换算" + (f": {best.note}" if best.note else ""),
+    )
+
+
+def _category_fallback(
+    weight_g: float,
+    category: str,
+) -> NutritionEstimateResult:
+    """类别兜底估算 — 保证不为零"""
+    fb = _CATEGORY_FALLBACK_PER_100G.get(category)
+    if not fb:
+        fb = _CATEGORY_FALLBACK_PER_100G["混合菜"]
+
+    scale = weight_g / 100.0
+    return NutritionEstimateResult(
+        calories=round(fb[0] * scale, 1),
+        protein=round(fb[1] * scale, 1),
+        carbs=round(fb[2] * scale, 1),
+        fat=round(fb[3] * scale, 1),
+        estimated_weight_g=weight_g,
+        confidence=0.25,
+        source="fallback",
+        estimated=True,
+        reasoning=f"使用{category}类别兜底估算，{weight_g:.0f}g",
+    )
+
+
+def _default_weight_by_category(category: str | None, quantity_description: str | None) -> float:
+    """根据类别和份量描述推断重量"""
+    import re
+
+    desc = (quantity_description or "").lower()
+
+    # 从份量描述提取数字
+    m = re.search(r"(\d+)\s*(g|克|ml|毫升|碗|盘|份|杯|瓶)", desc)
+    if m:
+        num = float(m.group(1))
+        unit = m.group(2)
+        if unit in ("g", "克", "ml", "毫升"):
+            return num
+        if unit in ("碗", "盘"):
+            return num * 250
+        if unit in ("份"):
+            return num * 300
+        if unit in ("杯", "瓶"):
+            return num * 250
+
+    if "碗" in desc or "盘" in desc or "份" in desc:
+        return 300.0
+    if "杯" in desc or "瓶" in desc:
+        return 250.0
+
+    # Category-based defaults
+    defaults = {
+        "主食": 200.0,
+        "蛋白质": 150.0,
+        "蔬菜": 150.0,
+        "饮品": 300.0,
+        "混合菜": 300.0,
+        "主食混合菜": 300.0,
+        "混合套餐": 350.0,
+        "零食": 50.0,
+        "含糖饮品": 300.0,
+    }
+    return defaults.get(category or "", 250.0)
+
+
+def estimate_nutrition(
+    item: RecognizedFoodItem,
+    ocr_food_name: str | None = None,
+) -> NutritionEstimateResult:
+    """对单个识别到的食物项进行营养估算。
+
+    策略（按优先级）：
+    1. Vision AI 已返回完整营养 → 直接使用
+    2. Retriever 参考 + 重量换算
+    3. 类别兜底
+
+    硬规则：只要 weight_g > 0，最终 calories 不能为 0。
+    """
+    food_name = item.food_name or ocr_food_name or "未知食物"
+    category = item.category or "混合菜"
+    weight_g = item.estimated_weight_g or 0.0
+
+    if weight_g <= 0:
+        weight_g = _default_weight_by_category(category, item.quantity_description)
+
+    # Strategy 1: Vision estimates
+    if _vision_has_nutrition(item):
+        return NutritionEstimateResult(
+            calories=float(item.calories or 0),
+            protein=float(item.protein or 0),
+            carbs=float(item.carbs or 0),
+            fat=float(item.fat or 0),
+            estimated_weight_g=weight_g,
+            confidence=item.confidence,
+            source="vision",
+            estimated=True,
+            reasoning=item.reasoning or "AI Vision 直接估算",
+        )
+
+    # Strategy 2: Normalize + retrieve references
+    norm = normalize_food_name(food_name, category, None)
+    refs = retrieve_nutrition_references(
+        food_name=norm["normalized_name"],
+        category=norm["category"],
+        search_queries=norm["search_queries"],
+    )
+
+    result = _estimate_from_references(weight_g, refs)
+    if result is not None:
+        if item.reasoning:
+            result.reasoning = f"{item.reasoning}; {result.reasoning}"
+        return result
+
+    # Strategy 3: Category fallback
+    result = _category_fallback(weight_g, category)
+    return result
+
+
+# Legacy dataclass for backward compatibility with fusion_service
 @dataclass
 class NutritionEstimate:
     calories: int = 0
@@ -61,91 +184,16 @@ class NutritionEstimate:
     fat: int = 0
     estimated: bool = True
     confidence: float = 0.0
-    source: str = "rule"
+    source: str = "fallback"
 
-
-def _fuzzy_match(food_name: str) -> str | None:
-    """模糊匹配食物名称"""
-    if not food_name:
-        return None
-    # 精确匹配
-    if food_name in _NUTRITION_PER_100G:
-        return food_name
-    if food_name in _SERVING_NUTRITION:
-        return food_name
-    # 子串匹配
-    for key in _NUTRITION_PER_100G:
-        if key in food_name or food_name in key:
-            return key
-    for key in _SERVING_NUTRITION:
-        if key in food_name or food_name in key:
-            return key
-    return None
-
-
-def estimate_nutrition(
-    food_name: str,
-    weight_g: int = 0,
-    estimated_weight: str = "",
-) -> NutritionEstimate:
-    """估算单个食物的营养数据
-
-    Args:
-        food_name: 食物名称
-        weight_g: 克数（0 表示未知）
-        estimated_weight: 估重文本（如 "约150g"）
-
-    Returns:
-        NutritionEstimate
-    """
-    if not food_name or not food_name.strip():
-        return NutritionEstimate(confidence=0.0)
-
-    food_name = food_name.strip()
-
-    # 先查按份估算（优先级更高）
-    if food_name in _SERVING_NUTRITION:
-        cal, pro, carb, fat, _ = _SERVING_NUTRITION[food_name]
-        return NutritionEstimate(
-            calories=int(cal), protein=int(pro), carbs=int(carb), fat=int(fat),
-            confidence=0.6, estimated=True, source="rule-serving",
+    @classmethod
+    def from_result(cls, r: NutritionEstimateResult) -> "NutritionEstimate":
+        return cls(
+            calories=int(r.calories),
+            protein=int(r.protein),
+            carbs=int(r.carbs),
+            fat=int(r.fat),
+            estimated=r.estimated,
+            confidence=r.confidence,
+            source=r.source,
         )
-
-    # 再查模糊匹配 serving
-    for key in _SERVING_NUTRITION:
-        if key in food_name:
-            cal, pro, carb, fat, _ = _SERVING_NUTRITION[key]
-            return NutritionEstimate(
-                calories=int(cal), protein=int(pro), carbs=int(carb), fat=int(fat),
-                confidence=0.55, estimated=True, source="rule-fuzzy-serving",
-            )
-
-    # 查每 100g 规则
-    matched_key = _fuzzy_match(food_name)
-    matched_100g = matched_key in _NUTRITION_PER_100G if matched_key else False
-
-    if matched_100g:
-        cal, pro, carb, fat = _NUTRITION_PER_100G[matched_key]
-        conf = 0.7 if matched_key == food_name else 0.5
-        if weight_g > 0:
-            factor = weight_g / 100.0
-            cal *= factor
-            pro *= factor
-            carb *= factor
-            fat *= factor
-            conf = min(conf + 0.1, 0.95)
-        return NutritionEstimate(
-            calories=int(cal), protein=int(pro), carbs=int(carb), fat=int(fat),
-            confidence=conf, estimated=True, source="rule-100g",
-        )
-
-    if matched_key in _SERVING_NUTRITION:
-        cal, pro, carb, fat, _ = _SERVING_NUTRITION[matched_key]
-        return NutritionEstimate(
-            calories=int(cal), protein=int(pro), carbs=int(carb), fat=int(fat),
-            confidence=0.5, estimated=True, source="rule-fuzzy",
-        )
-
-    # 未找到
-    logger.info("nutrition_estimator: unknown food=%s", food_name)
-    return NutritionEstimate(confidence=0.0)

@@ -70,6 +70,21 @@ async def get_task_detail(
     )
     events = events_result.scalars().all()
 
+    # 非食物检测：查关联 record 是否为空
+    is_food_detected = True
+    non_food_reason = None
+    if task.record_id:
+        from app.models.food_item import FoodItem
+        item_count = await db.execute(
+            select(FoodItem).where(FoodItem.record_id == task.record_id)
+        )
+        items_list = item_count.scalars().all()
+        if not items_list and task.status == "SUCCESS":
+            is_food_detected = False
+            non_food_reason = "未识别到可分析的食物"
+    elif task.status == "SUCCESS":
+        is_food_detected = None
+
     return TaskDetailResponse(
         id=str(task.id),
         task_id=str(task.id),
@@ -84,7 +99,9 @@ async def get_task_detail(
         retry_count=task.retry_count,
         error_message=task.error_message,
         record_id=str(task.record_id) if task.record_id else None,
-        events=[TaskEventItem(time=e.time, title=e.title) for e in events],
+        is_food_detected=is_food_detected,
+        non_food_reason=non_food_reason,
+        events=[TaskEventItem(time=e.time, title=e.title, created_at=e.created_at) for e in events],
     )
 
 

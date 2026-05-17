@@ -8,8 +8,12 @@ export type FoodItemLabelInfo = {
 
 const SOURCE_MAP: Record<string, string> = {
   vision: "视觉识别",
+  "vision+rag": "视觉识别 + 营养检索",
   ocr: "OCR识别",
   fusion: "融合识别",
+  rag: "营养检索",
+  ai_estimate: "AI估算",
+  fallback: "估算兜底",
   manual: "用户确认",
 }
 

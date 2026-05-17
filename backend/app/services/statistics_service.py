@@ -60,6 +60,7 @@ async def _query_week(db: AsyncSession, user_id: str, week_days: list[date]):
         )
         .where(
             FoodRecord.user_id == user_id,
+            FoodRecord.status == "confirmed",
             FoodRecord.created_at >= start,
             FoodRecord.created_at < end,
         )
@@ -83,6 +84,7 @@ async def _query_meal_dist(db: AsyncSession, user_id: str, week_days: list[date]
         )
         .where(
             FoodRecord.user_id == user_id,
+            FoodRecord.status == "confirmed",
             FoodRecord.created_at >= start,
             FoodRecord.created_at < end,
         )

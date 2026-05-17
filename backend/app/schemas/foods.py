@@ -12,6 +12,18 @@ class FoodUploadResponse(BaseModel):
     task_id: str
 
 
+class FoodComponentDetail(BaseModel):
+    name: str
+    confidence: float = 0.5
+    estimated_weight_g: Optional[float] = None
+    calories: Optional[float] = None
+    protein: Optional[float] = None
+    carbs: Optional[float] = None
+    fat: Optional[float] = None
+    role: str = "ingredient"
+    include_in_total: bool = False
+
+
 class FoodItemDetail(BaseModel):
     id: str
     food_name: str
@@ -21,11 +33,18 @@ class FoodItemDetail(BaseModel):
     carbohydrate: int  # DB 字段 carbs，API 返回 carbohydrate
     fat: int
     image_url: Optional[str] = None
+    category: str = "unknown"
+    confidence: float = 0.0
+    source: str = "unknown"
+    estimated: bool = False
+    components: list[FoodComponentDetail] = []
 
 
 class FoodRecordDetail(BaseModel):
     id: str
+    status: str = "draft"
     status_label: str
+    confirmed_at: Optional[datetime] = None
     total_calories: int
     protein: int
     carbohydrate: int
@@ -35,6 +54,8 @@ class FoodRecordDetail(BaseModel):
     created_at: Optional[datetime] = None
     summary: Optional[str] = None
     ocr_text: Optional[str] = None
+    is_food_detected: Optional[bool] = None
+    non_food_reason: Optional[str] = None
 
 
 class AiLogDetail(BaseModel):
@@ -73,9 +94,11 @@ class FoodListItemDetail(BaseModel):
 
 class FoodListItem(BaseModel):
     id: str
+    status: str = "draft"
     meal_type: str
     title: str
     time: str
+    created_at: Optional[str] = None
     total_calories: int
     summary: Optional[str] = None
     protein: int
@@ -99,6 +122,20 @@ class ConfirmFoodItem(BaseModel):
     protein: int = 0
     carbs: int = 0
     fat: int = 0
+
+
+class DraftFoodItemUpdate(BaseModel):
+    """draft update 接受的 item 字段 — 比 ConfirmFoodItem 更宽松"""
+    id: str | None = None
+    food_name: str | None = None
+    display_name: str | None = None
+    name: str | None = None
+    weight: str | None = None
+    estimated_weight_g: float | None = None
+    quantity_description: str | None = None
+    category: str | None = None
+    is_new: bool = False
+    name_changed: bool = False
 
 
 class ConfirmFoodRequest(BaseModel):

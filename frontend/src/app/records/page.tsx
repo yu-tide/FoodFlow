@@ -12,7 +12,7 @@ import {
   ClipboardList,
   CloudUpload,
   Coffee,
-  Crown,
+
   Flame,
   Home,
   Info,
@@ -29,9 +29,12 @@ import {
   Wheat,
 } from 'lucide-react'
 import { apiGet, ApiError } from '@/services/api'
+import DatePopover from '@/components/ui/DatePopover'
+import AccountMenu from '@/components/user/AccountMenu'
+import ProfileEntry from '@/components/user/ProfileEntry'
 
 type MealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'
-type RangeType = 'today' | 'yesterday' | 'week'
+type RangeType = 'today' | 'yesterday' | 'week' | 'custom'
 type MealFilter = 'all' | MealType
 
 type UserProfile = {
@@ -52,6 +55,7 @@ type FoodRecord = {
   mealType: MealType
   title: string
   time: string
+  createdAt: string
   calories: number
   summary: string
   protein: number
@@ -62,6 +66,10 @@ type FoodRecord = {
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? ''
+
+function isToday(d: Date) { const t = new Date(); return d.getFullYear()===t.getFullYear() && d.getMonth()===t.getMonth() && d.getDate()===t.getDate() }
+function isYesterday(d: Date) { const y = new Date(); y.setDate(y.getDate()-1); return d.getFullYear()===y.getFullYear() && d.getMonth()===y.getMonth() && d.getDate()===y.getDate() }
+function getDateKey(d: Date|string) { const dt = new Date(d); return Number.isNaN(dt.getTime()) ? '' : `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}` }
 
 function getUserProfile(): UserProfile {
   if (typeof window === 'undefined') return { nickname: '', phone: '', avatarText: '' }
@@ -90,6 +98,7 @@ function adaptRecord(raw: any): FoodRecord {
     mealType,
     title: raw.title || mealTitleMap[mealType] || '',
     time: raw.time || '',
+    createdAt: raw.created_at || raw.createdAt || '',
     calories: Number(raw.total_calories || 0),
     summary: raw.summary || '',
     protein: Number(raw.protein || 0),
@@ -137,12 +146,21 @@ export default function RecordsPage() {
   const [user] = useState<UserProfile>(getUserProfile)
   const [range, setRange] = useState<RangeType>('week')
   const [filter, setFilter] = useState<MealFilter>('all')
+  const [selectedDate, setSelectedDate] = useState(() => new Date())
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
   const [uploadMealType, setUploadMealType] = useState<MealType>('snack')
   const [records, setRecords] = useState<FoodRecord[]>([])
+  const [allRecords, setAllRecords] = useState<FoodRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState('')
+
+  const handleRangeChange = (nextRange: RangeType) => {
+    setRange(nextRange)
+    if (nextRange === 'yesterday') { const y = new Date(); y.setDate(y.getDate() - 1); setSelectedDate(y) }
+    else setSelectedDate(new Date())
+  }
 
   useEffect(() => {
     let ignore = false
@@ -153,18 +171,11 @@ export default function RecordsPage() {
         const res = await apiGet<FoodListApi>(`/api/foods?range=${range}`)
         if (!ignore) setRecords((res.data || []).map(adaptRecord))
       } catch (err) {
-        console.error('[Records] load failed:', err)
-        if (!ignore) {
-          if (err instanceof ApiError) {
-            if (err.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); router.push('/login'); return }
-            setError(err.message)
-          } else {
-            setError('加载失败')
-          }
-        }
-      } finally {
-        if (!ignore) setLoading(false)
+        if (!ignore && err instanceof ApiError && err.status === 401) { localStorage.removeItem('token'); localStorage.removeItem('user'); router.push('/login'); return }
       }
+      // allRecords for streak (not affected by range)
+      try { const allRes = await apiGet<FoodListApi>('/api/foods?limit=200'); if (!ignore) setAllRecords((allRes.data||[]).map(adaptRecord)) } catch {}
+      if (!ignore) setLoading(false)
     }
     load()
     return () => { ignore = true }
@@ -174,6 +185,14 @@ export default function RecordsPage() {
     if (filter === 'all') return records
     return records.filter((item) => item.mealType === filter)
   }, [records, filter])
+
+  const streakDays = useMemo(() => {
+    const days = new Set(allRecords.map(r => r.createdAt ? getDateKey(r.createdAt) : '').filter(Boolean))
+    const today = getDateKey(new Date())
+    let cursor = new Date(); if (!days.has(today)) cursor.setDate(cursor.getDate() - 1)
+    let s = 0; while (days.has(getDateKey(cursor))) { s++; cursor.setDate(cursor.getDate() - 1) }
+    return s
+  }, [allRecords])
 
   const consumedCalories = records.reduce((t, r) => t + r.calories, 0)
   const targetCalories = 2000
@@ -233,13 +252,18 @@ export default function RecordsPage() {
                   today={today}
                   recordCount={records.length}
                   totalProtein={totalProtein}
+                  streakDays={streakDays}
                 />
 
                 <FilterBar
                   range={range}
                   filter={filter}
-                  onRangeChange={setRange}
+                  onRangeChange={handleRangeChange}
                   onFilterChange={setFilter}
+                  selectedDate={selectedDate}
+                  onDateChange={setSelectedDate}
+                  datePickerOpen={datePickerOpen}
+                  setDatePickerOpen={setDatePickerOpen}
                 />
 
                 <MealRecordsList
@@ -324,38 +348,8 @@ function Sidebar({ user }: { user: UserProfile }) {
         />
       </nav>
 
-      <div className="mt-auto space-y-4">
-        <div className="rounded-2xl border border-green-100 bg-gradient-to-br from-green-50 to-white p-4 shadow-[0_18px_45px_rgba(22,101,52,0.08)]">
-          <div className="mb-2 flex items-center gap-2 text-green-700">
-            <Crown className="h-5 w-5 fill-green-100 stroke-[2.4]" />
-            <span className="text-[17px] font-black">升级专业版</span>
-          </div>
-
-          <p className="text-[13px] font-semibold leading-5 text-slate-500">
-            解锁更强的 AI 洞察与个性化目标。
-          </p>
-
-          <button className="mt-3 h-9 w-full rounded-xl border border-green-500 bg-white text-[14px] font-black text-green-700 transition hover:bg-green-50">
-            立即升级
-          </button>
-        </div>
-
-        <button className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_14px_35px_rgba(15,23,42,0.05)] transition hover:bg-slate-50">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[21px] font-black text-white shadow-lg shadow-green-600/20">
-            {user.avatarText}
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[16px] font-black text-slate-900">
-              {user.nickname}
-            </div>
-            <div className="truncate text-[12px] font-semibold text-slate-500">
-              {user.phone}
-            </div>
-          </div>
-
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" />
-        </button>
+      <div className="mt-auto">
+        <AccountMenu user={user} />
       </div>
     </aside>
   )
@@ -431,11 +425,7 @@ function TopHeader({
           </div>
         </div>
 
-        <button className="grid h-12 w-12 place-items-center rounded-full bg-gradient-to-br from-green-400 to-green-700 text-[24px] font-black text-white shadow-xl shadow-green-600/20">
-          {user.avatarText}
-        </button>
-
-        <ChevronDown className="h-5 w-5 text-slate-500" />
+        <ProfileEntry user={user} statusText={today.statusText} detailText="点击进入个人中心" loading={loading} />
       </div>
     </header>
   )
@@ -482,10 +472,12 @@ function SummaryCards({
   today,
   recordCount,
   totalProtein,
+  streakDays,
 }: {
   today: TodaySummary
   recordCount: number
   totalProtein: number
+  streakDays: number
 }) {
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -520,7 +512,7 @@ function SummaryCards({
         icon={<Flame className="h-5 w-5" />}
         iconClassName="bg-violet-50 text-violet-600"
         label="连续记录"
-        value="12"
+        value={String(streakDays)}
         unit="天"
         helper="保持良好习惯！"
       />
@@ -574,15 +566,14 @@ function MetricCard({
 }
 
 function FilterBar({
-  range,
-  filter,
-  onRangeChange,
-  onFilterChange,
+  range, filter, onRangeChange, onFilterChange,
+  selectedDate, onDateChange,
+  datePickerOpen, setDatePickerOpen,
 }: {
-  range: RangeType
-  filter: MealFilter
-  onRangeChange: (value: RangeType) => void
-  onFilterChange: (value: MealFilter) => void
+  range: RangeType; filter: MealFilter
+  onRangeChange: (v: RangeType) => void; onFilterChange: (v: MealFilter) => void
+  selectedDate: Date; onDateChange: (d: Date) => void
+  datePickerOpen: boolean; setDatePickerOpen: (v: boolean) => void
 }) {
   return (
     <CardShell className="p-2">
@@ -604,16 +595,19 @@ function FilterBar({
           ))}
         </div>
 
-        <button
-          type="button"
-          className="flex h-10 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 text-[15px] font-black text-slate-600 transition hover:bg-slate-50 xl:min-w-[220px]"
-        >
-          <span className="flex items-center gap-2">
-            <CalendarDays className="h-4 w-4 text-slate-400" />
-            2024年5月18日
-          </span>
-          <ChevronDown className="h-4 w-4 text-slate-400" />
-        </button>
+        <div className="relative">
+          <button type="button"
+            onClick={() => setDatePickerOpen(!datePickerOpen)}
+            className="flex h-10 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 text-[15px] font-black text-slate-600 transition hover:bg-slate-50 xl:min-w-[220px]"
+          >
+            <span className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 text-slate-400" />
+              {range === 'week' ? '本周' : range === 'today' || isToday(selectedDate) ? '今天' : range === 'yesterday' || isYesterday(selectedDate) ? '昨天' : selectedDate.toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'})}
+            </span>
+            <ChevronDown className="h-4 w-4 text-slate-400" />
+          </button>
+          {datePickerOpen && (<DatePopover selected={selectedDate} onSelect={(d) => { onDateChange(d); onRangeChange(isToday(d)?'today':isYesterday(d)?'yesterday':'custom'); }} onClose={() => setDatePickerOpen(false)} />)}
+        </div>
 
         <div className="flex flex-wrap rounded-xl bg-slate-50 p-1">
           {filterTabs.map((item) => (
