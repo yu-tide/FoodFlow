@@ -23,10 +23,19 @@ function savePosition(pos: Position) {
 
 export function useDraggableAssistant() {
   const [position, setPosition] = useState<Position>(() => {
+    if (typeof window === "undefined") return { x: 0, y: 0 };
     const saved = loadPosition();
     if (saved) return saved;
     return { x: window.innerWidth - 72, y: window.innerHeight - 72 };
   });
+
+  // Recalculate position on first client render
+  useEffect(() => {
+    if (position.x === 0 && position.y === 0) {
+      const saved = loadPosition();
+      setPosition(saved ?? { x: window.innerWidth - 72, y: window.innerHeight - 72 });
+    }
+  }, []);
 
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; posX: number; posY: number } | null>(null);

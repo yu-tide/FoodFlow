@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AssistantProvider } from "@/components/assistant/AssistantProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <AssistantProvider />
+      </body>
     </html>
   );
 }
