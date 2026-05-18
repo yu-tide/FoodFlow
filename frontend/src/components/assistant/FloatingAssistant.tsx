@@ -9,7 +9,7 @@ import { AssistantPanel } from "./AssistantPanel";
 export function FloatingAssistant() {
   const [isOpen, setIsOpen] = useState(false);
   const { position, dragging, movedRef, onPointerDown } = useDraggableAssistant();
-  const { page, pageContext, isLoginPage, quickQuestions } = useAssistantContext();
+  const { page, buildPageContext, isLoginPage, quickQuestions } = useAssistantContext();
 
   if (isLoginPage) return null;
 
@@ -40,7 +40,7 @@ export function FloatingAssistant() {
         <div className="fixed bottom-4 right-4 z-50 w-[380px] max-w-[calc(100vw-2rem)] md:w-[400px]">
           <AssistantPanel
             page={page}
-            pageContext={pageContext}
+            buildPageContext={buildPageContext}
             quickQuestions={quickQuestions}
             onClose={() => setIsOpen(false)}
           />

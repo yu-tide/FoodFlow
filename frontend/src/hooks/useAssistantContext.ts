@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 
 const QUICK_QUESTIONS: Record<string, string[]> = {
@@ -52,18 +52,36 @@ function matchQuickQuestions(pathname: string): string[] {
 export function useAssistantContext() {
   const pathname = usePathname();
 
-  return useMemo(() => {
-    const context: Record<string, string> = { page: pathname };
-    if (pathname.startsWith("/records/")) {
-      context["record_id"] = pathname.split("/")[2] || "";
-    } else if (pathname.startsWith("/confirm/")) {
-      context["record_id"] = pathname.split("/")[2] || "";
-    }
-    return {
-      page: pathname,
-      pageContext: context,
-      isLoginPage: pathname === "/login" || pathname === "/register",
-      quickQuestions: matchQuickQuestions(pathname),
-    };
+  const pageInfo = useMemo(() => {
+    const recordId =
+      pathname.startsWith("/records/") || pathname.startsWith("/confirm/")
+        ? pathname.split("/")[2] || ""
+        : "";
+    return { page: pathname, recordId };
   }, [pathname]);
+
+  const buildPageContext = useCallback(() => {
+    const now = new Date();
+    const ctx: Record<string, string> = {
+      page: pageInfo.page,
+      client_time_iso: now.toISOString(),
+      local_hour: String(now.getHours()),
+      local_minute: String(now.getMinutes()),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      local_time_text: now.toLocaleTimeString("zh-CN", {
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      }),
+    };
+    if (pageInfo.recordId) {
+      ctx["record_id"] = pageInfo.recordId;
+    }
+    return ctx;
+  }, [pageInfo]);
+
+  return {
+    page: pageInfo.page,
+    buildPageContext,
+    isLoginPage: pathname === "/login" || pathname === "/register",
+    quickQuestions: matchQuickQuestions(pathname),
+  };
 }

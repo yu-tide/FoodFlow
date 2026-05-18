@@ -9,6 +9,10 @@ engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG, poolcla
 
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
+# Eager model import: ensure Base.metadata is populated before any asyncio.run() call.
+# This prevents "mapper not found" errors when the task body lazily imports services
+# that transitively import models inside a new event loop.
+import app.models  # noqa: F401, E402
 
 async def get_db():
     async with async_session() as session:
