@@ -130,9 +130,41 @@ def build_assistant_plan_from_reasoning(
         "TRACE_ASSISTANT_PLAN_FROM_REASONING request_type=%s decision_mode=%s required_tools=%s",
         rt, reasoning.decision_mode, reasoning.required_tools,
     )
+
+    # Phase 17: Tool registry — validate plan steps don't include disallowed tools
+    _validate_plan_steps(plan)
+
     logger.warning(
         "TRACE_ASSISTANT_PLAN_BUILT intent=%s steps=%s requires_rag=%s requires_llm=%s risk_level=%s",
         plan.intent, plan.steps, plan.requires_rag, plan.requires_llm, plan.risk_level,
     )
 
     return plan
+
+
+def _validate_plan_steps(plan: AssistantPlan) -> None:
+    """Lightweight: ensure no non-read-only or disabled tool appears in plan steps.
+
+    Only checks steps that map to real tools (via STEP_TO_TOOL).
+    Abstract steps (generate_llm_answer, build_safe_action, etc.) are skipped.
+    """
+    from app.services.tool_registry import STEP_TO_TOOL, get_tool_spec
+
+    disallowed: list[str] = []
+    for step in list(plan.steps):
+        tool_name = STEP_TO_TOOL.get(step)
+        if not tool_name:
+            continue  # abstract step, skip
+        spec = get_tool_spec(tool_name)
+        if not spec or not spec.enabled:
+            disallowed.append(f"{step}(not_registered)")
+            plan.steps.remove(step)
+        elif not spec.read_only:
+            disallowed.append(f"{step}(write_tool)")
+            plan.steps.remove(step)
+
+    if disallowed:
+        logger.warning(
+            "TRACE_TOOL_REGISTRY_PLAN_CHECK intent=%s disallowed_tools=%s",
+            plan.intent, disallowed,
+        )

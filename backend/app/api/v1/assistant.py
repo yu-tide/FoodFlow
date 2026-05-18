@@ -596,6 +596,13 @@ async def execute_action(
     user_id = str(current_user.id)
     logger.warning("TRACE_ASSISTANT_ACTION_EXECUTE_START action_type=%s", body.type)
 
+    # Phase 17: Tool registry pre-check — lightweight, does not replace business-auth
+    from app.services.tool_registry import is_tool_allowed
+    ctx = {"confirmed_by_user": True, "action_type": body.type, "source": "assistant_action_execute_endpoint"}
+    if not is_tool_allowed("execute_assistant_action", ctx):
+        logger.warning("TRACE_TOOL_REGISTRY_ACTION_BLOCKED action_type=%s", body.type)
+        return AssistantActionExecuteResponse(ok=False, type=body.type, message="该操作需要用户确认")
+
     result = await execute_assistant_action(db, user_id, body.type, body.payload)
 
     if result.get("ok"):
