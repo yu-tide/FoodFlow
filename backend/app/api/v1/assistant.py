@@ -117,6 +117,7 @@ def _build_context_result(
     msg: str, page: str, ctx: dict, tool_context: dict,
     sources: list, answer: str, reasoning,
     force_empty_actions: bool = False,
+    plan: object = None,
 ) -> dict:
     """Build the standard context dict returned by build_assistant_context."""
     if force_empty_actions or reasoning.should_refuse_or_limit:
@@ -124,7 +125,7 @@ def _build_context_result(
     else:
         actions = [a.model_dump() for a in build_suggested_actions(msg, page, ctx, tool_context)]
 
-    return {
+    result = {
         "user_message": msg,
         "page": page,
         "page_context": ctx,
@@ -140,6 +141,9 @@ def _build_context_result(
             "avoid": ["raw_internal_status", "long_paragraph", "markdown_table", "tool_json"],
         },
     }
+    if plan is not None:
+        result["plan"] = plan.model_dump()
+    return result
 
 
 def _parse_local_time(ctx: dict) -> tuple[int | None, int | None]:
@@ -191,11 +195,16 @@ async def build_assistant_context(
                    reasoning.request_type, reasoning.decision_mode,
                    reasoning.required_tools, reasoning.risk_level)
 
+    # ═══ Phase 15: Convert reasoning to structured plan (pure mapper, no re-classification) ═══
+    from app.services.assistant_planner import build_assistant_plan_from_reasoning
+    plan = build_assistant_plan_from_reasoning(reasoning)
+    logger.warning("TRACE_ASSISTANT_PLAN_USED intent=%s", plan.intent)
+
     # ═══ Pre-data check: needs clarification (e.g. record_analysis without record_id) ═══
     if reasoning.needs_clarification:
         answer = "你想查看哪条记录？请在记录列表中点击一条具体记录后再问我，我可以帮你分析成分、热量和保存状态。"
         sources.append({"type": "assistant_info", "title": "需要更多信息"})
-        return _build_context_result(msg, page, ctx, {}, sources, answer, reasoning)
+        return _build_context_result(msg, page, ctx, {}, sources, answer, reasoning, plan=plan)
 
     # ═══ Pre-data check: refuse unsafe actions immediately ═══
     if reasoning.should_refuse_or_limit:
@@ -204,7 +213,7 @@ async def build_assistant_context(
             "如果需要调整营养目标，可以前往「设置」页面修改。"
         )
         sources.append({"type": "assistant_info", "title": "操作受限"})
-        return _build_context_result(msg, page, ctx, {}, sources, answer, reasoning, force_empty_actions=True)
+        return _build_context_result(msg, page, ctx, {}, sources, answer, reasoning, force_empty_actions=True, plan=plan)
 
     # ═══ Dispatch by reasoning.request_type ═══
 
@@ -472,7 +481,7 @@ async def build_assistant_context(
             tool_context["rag_note"] = "知识库检索结果置信不足，无可靠匹配。请告知用户当前知识库里没有足够可靠的信息，不建议硬猜。"
             logger.warning("TRACE_RAG_LOW_CONFIDENCE reason=%s", rag_result["reason"])
 
-    return _build_context_result(msg, page, ctx, tool_context, sources, answer, reasoning)
+    return _build_context_result(msg, page, ctx, tool_context, sources, answer, reasoning, plan=plan)
 
 
 @router.post("/chat", response_model=ChatResponse)
