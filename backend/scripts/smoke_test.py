@@ -21,6 +21,10 @@ import sys
 import time
 from pathlib import Path
 
+# Fix Windows GBK encoding for emoji output
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 try:
     import httpx
 except ImportError:
