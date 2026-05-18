@@ -7,6 +7,7 @@ from app.models.analyze_task import AnalyzeTask
 from app.models.task_event import TaskEvent
 from app.models.weekly_statistics import WeeklyStatistics
 from app.models.knowledge import KnowledgeDocument, KnowledgeChunk
+from app.models.assistant_memory import AssistantMemory
 
 __all__ = [
     "AILog",
@@ -19,4 +20,5 @@ __all__ = [
     "WeeklyStatistics",
     "KnowledgeDocument",
     "KnowledgeChunk",
+    "AssistantMemory",
 ]

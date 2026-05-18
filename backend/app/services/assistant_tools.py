@@ -171,6 +171,12 @@ async def get_settings_snapshot(db: AsyncSession, user_id: str) -> dict:
             "target_fat": settings.target_fat,
             "goal_type": settings.goal_type or "maintain",
             "nutrition_goal_mode": settings.nutrition_goal_mode or "agent_recommended",
+            # Phase 16: expose user preferences for memory context
+            "avoid_foods": settings.avoid_foods or "",
+            "allergens": settings.allergens or "",
+            "cuisines": settings.cuisines or [],
+            "taste_preference": settings.taste_preference or "normal",
+            "diet_style": settings.diet_style or "normal",
         }
     return {
         "target_calories": 2000,
@@ -179,6 +185,11 @@ async def get_settings_snapshot(db: AsyncSession, user_id: str) -> dict:
         "target_fat": None,
         "goal_type": "maintain",
         "nutrition_goal_mode": "agent_recommended",
+        "avoid_foods": "",
+        "allergens": "",
+        "cuisines": [],
+        "taste_preference": "normal",
+        "diet_style": "normal",
     }
 
 

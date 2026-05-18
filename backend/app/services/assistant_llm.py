@@ -224,6 +224,11 @@ def sanitize_llm_context(tool_context: dict, page_context: dict | None = None) -
     if "rag_results" in tool_context:
         result["知识库"] = tool_context["rag_results"]
 
+    # Phase 16: Attach cleaned memory summary
+    memory_facts = _build_memory_facts_summary(tool_context)
+    if memory_facts:
+        result["用户偏好与饮食模式"] = memory_facts
+
     # ── Safety: strip any remaining forbidden keys ──
     result = _strip_forbidden_keys(result)
 
@@ -295,6 +300,68 @@ def _build_meal_plan_facts(mp: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Memory facts helper (Phase 16)
+# ═══════════════════════════════════════════════════════════════
+
+def _build_memory_facts_summary(tool_context: dict) -> list[str]:
+    """Extract cleaned memory summary from tool_context memory_context.
+
+    Returns user-visible Chinese text only. Never raw value_json, ids, or timestamps.
+    avoid_foods / allergens only trigger strong reminders when the current food/entity matches.
+    """
+    mem = tool_context.get("memory_context") or tool_context.get("personalized_food_decision", {}).get("memory_context")
+    if not mem or not isinstance(mem, dict):
+        return []
+
+    # Determine current food/entity name for contextual matching
+    current_food = ""
+    pfd = tool_context.get("personalized_food_decision", {})
+    if isinstance(pfd, dict):
+        current_food = pfd.get("food_name", "") or ""
+
+    lines: list[str] = []
+
+    # Explicit preferences
+    explicit = mem.get("explicit_preferences", {})
+    if isinstance(explicit, dict):
+        avoid = explicit.get("avoid_foods", [])
+        if avoid and isinstance(avoid, list) and len(avoid) > 0:
+            hit = any(a for a in avoid if a and current_food and a in current_food)
+            if hit:
+                # Strong reminder: current food/drink matches avoid list
+                hit_items = [a for a in avoid if a and current_food and a in current_food]
+                food_list = "、".join(str(f) for f in hit_items[:3])
+                lines.append(f"用户设置里把{food_list}列为避开食物/饮品，建议不选它")
+            else:
+                # Weak context: avoid list exists but not relevant to current query
+                food_list = "、".join(str(f) for f in avoid[:5])
+                lines.append(f"用户设置中有避开食物/饮品列表：{food_list}。仅在讨论这些食物时才提醒。")
+
+        allergens = explicit.get("allergens", [])
+        if allergens and isinstance(allergens, list) and len(allergens) > 0:
+            hit = any(a for a in allergens if a and current_food and a in current_food)
+            if hit:
+                # Only warn when current food matches allergen list
+                lines.append("用户设置里有与当前食物相关的过敏信息，建议避免或先确认")
+            # No hit → no allergen warning at all (don't spam generic warnings)
+
+    # Inferred patterns
+    inferred = mem.get("inferred_patterns", [])
+    if isinstance(inferred, list):
+        for p in inferred:
+            if not isinstance(p, dict):
+                continue
+            if p.get("key") == "spicy_hotpot_like_frequency" and p.get("level") == "high":
+                lines.append("最近已保存记录中麻辣烫/冒菜/火锅/烧烤类偏多，建议这次注意控制油和份量")
+            elif p.get("key") == "recent_high_fat_pattern" and p.get("level") == "high":
+                lines.append("最近已保存记录中高油餐出现较多，建议这次选清淡做法")
+            elif p.get("key") == "frequent_sugary_drink_pattern":
+                lines.append("最近含糖饮品出现得比较多，建议这次优先选无糖替代")
+
+    return lines
+
+
+# ═══════════════════════════════════════════════════════════════
 # Food decision facts (existing, kept intact)
 # ═══════════════════════════════════════════════════════════════
 
@@ -352,6 +419,12 @@ def build_food_decision_facts_for_llm(decision_context: dict) -> dict:
         facts["最近饮食提示"] = "最近已保存记录只用于判断饮食趋势，不计入今天已吃。以下是最近几顿："
         recent_names = [f"{r.get('name','')} {r.get('calories',0)}kcal" for r in recent[:3]]
         facts["最近几顿"] = recent_names
+
+    # Phase 16: Attach cleaned memory summary (from memory_context in tool_context)
+    # Only passes user-visible summary text, never raw value_json, ids, or timestamps
+    memory_facts = _build_memory_facts_summary(decision_context)
+    if memory_facts:
+        facts["用户偏好与饮食模式"] = memory_facts
 
     return _strip_forbidden_keys(facts)
 

@@ -246,6 +246,12 @@ async def build_assistant_context(
             {"type": "recent_records", "title": "最近饮食记录"},
         ]
 
+        # Phase 16: Build memory context (transient inference, no auto-write)
+        from app.services.assistant_memory import build_memory_context_for_food_decision
+        memory_ctx = await build_memory_context_for_food_decision(db, user_id, s, recent)
+        if memory_ctx:
+            tool_context["memory_context"] = memory_ctx
+
         level = decision["recommendation_level"]
         consumed = decision["consumed_calories"]
         target = decision["target_calories"]
@@ -344,6 +350,12 @@ async def build_assistant_context(
             {"type": "user_settings", "title": "营养目标"},
             {"type": "recent_records", "title": "最近饮食记录"},
         ]
+
+        # Phase 16: Build memory context (transient inference, no auto-write)
+        from app.services.assistant_memory import build_memory_context_for_food_decision
+        memory_ctx = await build_memory_context_for_food_decision(db, user_id, s, recent)
+        if memory_ctx:
+            tool_context["memory_context"] = memory_ctx
 
         record_note = ""
         if dash["record_count"] == 0:
