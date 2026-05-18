@@ -1,4 +1,5 @@
 """Read-only assistant tools — all statistics use confirmed records only."""
+import logging
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -8,6 +9,7 @@ from app.models.food_item import FoodItem
 from app.models.food_record import FoodRecord
 from app.models.user_settings import UserSettings
 
+logger = logging.getLogger(__name__)
 
 _WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -48,6 +50,91 @@ async def get_dashboard_snapshot(db: AsyncSession, user_id: str) -> dict:
         "carbs": total_carb,
         "fat": total_fat,
         "record_count": len(records),
+    }
+
+
+async def get_daily_snapshot(
+    db: AsyncSession,
+    user_id: str,
+    target_date: str,
+    timezone_str: str = "Asia/Shanghai",
+    date_label: str | None = None,
+) -> dict:
+    """Query confirmed records for a specific calendar date in the user's local timezone.
+
+    Uses FoodRecord.created_at (the only reliable timestamp on FoodRecord).
+    Does NOT use server UTC date for "yesterday" — computes from timezone.
+    """
+    from datetime import datetime, timedelta, timezone as dt_timezone
+    from zoneinfo import ZoneInfo
+
+    try:
+        tz = ZoneInfo(timezone_str)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+
+    # Parse target_date "2026-05-17" into local day boundaries
+    try:
+        local_midnight = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=tz)
+    except ValueError:
+        local_midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Convert local day boundaries to UTC for DB query
+    utc_start = local_midnight.astimezone(dt_timezone.utc)
+    utc_end = utc_start + timedelta(days=1)
+
+    result = await db.execute(
+        select(FoodRecord).where(
+            FoodRecord.user_id == user_id,
+            FoodRecord.status == "confirmed",
+            FoodRecord.created_at >= utc_start,
+            FoodRecord.created_at < utc_end,
+        )
+    )
+    records = result.scalars().all()
+
+    total_cal = sum(r.total_calories or 0 for r in records)
+    total_pro = sum(r.protein or 0 for r in records)
+    total_carb = sum(r.carbohydrate or 0 for r in records)
+    total_fat = sum(r.fat or 0 for r in records)
+
+    logger.warning(
+        "TRACE_DAILY_SNAPSHOT_RESULT date=%s date_label=%s record_count=%s total_calories=%s timezone=%s",
+        target_date, date_label or "?", len(records), total_cal, timezone_str,
+    )
+
+    # Batch-lookup food names from FoodItem (FoodRecord has no name column)
+    record_ids = [r.id for r in records[:20]]
+    food_name_map: dict[str, str] = {}
+    if record_ids:
+        name_result = await db.execute(
+            select(FoodItem.record_id, FoodItem.food_name)
+            .where(FoodItem.record_id.in_(record_ids))
+            .order_by(FoodItem.sort_order.asc())
+        )
+        for row in name_result.all():
+            if row.record_id not in food_name_map:
+                food_name_map[str(row.record_id)] = row.food_name or "未命名记录"
+
+    return {
+        "date": target_date,
+        "date_label": date_label or target_date,
+        "record_count": len(records),
+        "total_calories": total_cal,
+        "protein": total_pro,
+        "carbs": total_carb,
+        "fat": total_fat,
+        "records": [
+            {
+                "id": str(r.id),
+                "name": food_name_map.get(str(r.id), "未命名记录"),
+                "calories": r.total_calories or 0,
+                "protein": r.protein or 0,
+                "carbs": r.carbohydrate or 0,
+                "fat": r.fat or 0,
+            }
+            for r in records[:20]
+        ],
     }
 
 

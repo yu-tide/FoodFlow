@@ -47,7 +47,7 @@ def build_facts_for_llm(
     # ── Data-rich generic paths: delegate to sanitize_llm_context ──
     elif rt in (
         "dashboard_summary", "weekly_analysis", "settings_advice",
-        "record_analysis", "general_chat",
+        "record_analysis", "general_chat", "daily_history",
     ):
         if tool_context:
             facts = sanitize_llm_context(tool_context, page_context)

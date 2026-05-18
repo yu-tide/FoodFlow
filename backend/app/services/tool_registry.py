@@ -31,6 +31,7 @@ STEP_TO_TOOL: dict[str, str] = {
     "search_rag":           "search_knowledge",
     "estimate_food":        "estimate_food_for_decision",
     "build_food_decision":  "build_food_decision_context",
+    "read_daily_snapshot":  "get_daily_snapshot",
     "read_memory_context":  "build_memory_context_for_food_decision",
 }
 # Abstract steps NOT in STEP_TO_TOOL (not backed by real tools):
@@ -44,6 +45,13 @@ TOOLS: dict[str, ToolSpec] = {
         description="获取今日已保存记录的营养汇总（热量、蛋白质、碳水、脂肪、目标、剩余热量）",
         input_schema={},
         output_schema={"consumed_calories": "int", "target_calories": "int", "remaining_calories": "int"},
+        read_only=True, requires_confirmation=False, risk_level="none",
+    ),
+    "get_daily_snapshot": ToolSpec(
+        name="get_daily_snapshot",
+        description="获取用户指定日期的已保存饮食记录营养汇总（支持昨天/前天/指定日期），按本地时区查询",
+        input_schema={"target_date": "str", "timezone_str": "str", "date_label": "str"},
+        output_schema={"date": "str", "record_count": "int", "total_calories": "int", "protein": "int", "carbs": "int", "fat": "int"},
         read_only=True, requires_confirmation=False, risk_level="none",
     ),
     "get_weekly_snapshot": ToolSpec(

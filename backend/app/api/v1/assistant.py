@@ -26,6 +26,7 @@ from app.services.assistant_llm import (
 )
 from app.services.assistant_reasoning_gate import build_reasoning_result
 from app.services.assistant_tools import (
+    get_daily_snapshot,
     get_dashboard_snapshot,
     get_record_detail_snapshot,
     get_settings_snapshot,
@@ -163,6 +164,93 @@ def _parse_local_time(ctx: dict) -> tuple[int | None, int | None]:
     except (ValueError, TypeError):
         pass
     return hour, minute
+
+
+def _parse_daily_date(ctx: dict, msg: str) -> tuple[str, str]:
+    """Parse a target date and human-readable label from the user's message.
+
+    Uses page_context.timezone to compute "yesterday"/"前天" relative to user's local date.
+    Dates like "5月17日" are parsed directly.
+    Returns (target_date_iso, date_label).
+    """
+    import re
+    from datetime import date, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    tz_str = ctx.get("timezone", "Asia/Shanghai")
+    try:
+        tz = ZoneInfo(tz_str)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+
+    # Use client_time_iso if available, otherwise server local time
+    client_iso = ctx.get("client_time_iso", "")
+    try:
+        local_now = datetime.fromisoformat(client_iso).astimezone(tz)
+    except (ValueError, TypeError):
+        local_now = datetime.now(tz)
+
+    today = local_now.date()
+
+    if "昨天" in msg:
+        target = today - timedelta(days=1)
+        return (target.isoformat(), "昨天")
+    if "前天" in msg:
+        target = today - timedelta(days=2)
+        return (target.isoformat(), "前天")
+    if "大前天" in msg:
+        target = today - timedelta(days=3)
+        return (target.isoformat(), "大前天")
+
+    # "上周X"
+    weekday_map = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+    m = re.search(r"上周([一二三四五六日天])", msg)
+    if m:
+        target_wd = weekday_map.get(m.group(1), 0)
+        days_back = (today.weekday() - target_wd) % 7 + 7
+        target = today - timedelta(days=days_back)
+        return (target.isoformat(), f"上周{m.group(1)}")
+
+    # "星期X" (this week)
+    m2 = re.search(r"星期([一二三四五六日天])", msg)
+    if m2:
+        target_wd = weekday_map.get(m2.group(1), 0)
+        days_back = (today.weekday() - target_wd) % 7
+        target = today - timedelta(days=days_back)
+        return (target.isoformat(), f"星期{m2.group(1)}")
+
+    # "X月X日" / "X月X号" / bare "X月X" — parse with current year
+    m3 = re.search(r"(\d{1,2})月(\d{1,2})(?:[日号])?", msg)
+    if m3:
+        month, day = int(m3.group(1)), int(m3.group(2))
+        try:
+            target = date(today.year, month, day)
+        except ValueError:
+            target = today
+        return (target.isoformat(), f"{month}月{day}日")
+
+    # "2026-05-16" format
+    m4 = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", msg)
+    if m4:
+        try:
+            target = date(int(m4.group(1)), int(m4.group(2)), int(m4.group(3)))
+        except ValueError:
+            target = today
+        return (target.isoformat(), f"{m4.group(2)}月{m4.group(3)}日")
+
+    # "5-16" or "5.16" format (month-day)
+    m5 = re.search(r"(\d{1,2})[-.](\d{1,2})", msg)
+    if m5:
+        month, day = int(m5.group(1)), int(m5.group(2))
+        try:
+            target = date(today.year, month, day)
+        except ValueError:
+            target = today
+        return (target.isoformat(), f"{month}月{day}日")
+
+    # Fallback: yesterday (safe default for daily queries)
+    target = today - timedelta(days=1)
+    return (target.isoformat(), "昨天")
 
 
 async def _maybe_rag(db, msg: str) -> tuple[list, list]:
@@ -401,6 +489,32 @@ async def build_assistant_context(
             answer = "本周还没有已保存的饮食记录。上传餐图并保存后即可查看统计。"
         sources.append({"type": "weekly_statistics", "title": "本周饮食统计"})
 
+    # ── Daily history (昨天/前天/specific date) ──
+    elif reasoning.request_type == "daily_history":
+        logger.warning("TRACE_DAILY_QUERY_DETECTED")
+        target_date, date_label = _parse_daily_date(ctx, msg)
+        logger.warning("TRACE_DAILY_DATE_RANGE target_date=%s date_label=%s", target_date, date_label)
+
+        tz = ctx.get("timezone", "Asia/Shanghai")
+        dash = await get_daily_snapshot(db, user_id, target_date, tz, date_label)
+        s = await get_settings_snapshot(db, user_id)
+        tool_context = {"daily_snapshot": dash, "user_settings": s}
+
+        target = s.get("target_calories") or dash.get("target_calories") or 2000
+
+        if dash.get("record_count", 0) > 0:
+            answer = (
+                f"{date_label}：已摄入 {dash.get('total_calories', 0)} kcal，目标 {target} kcal。"
+                f"蛋白质 {dash.get('protein', 0)}g · 碳水 {dash.get('carbs', 0)}g · 脂肪 {dash.get('fat', 0)}g。"
+                f"共 {dash.get('record_count', 0)} 条已保存记录。"
+            )
+        else:
+            answer = (
+                f"{date_label}没有已保存饮食记录，所以我这里统计到的摄入是 0 kcal。"
+                "正在分析或未保存的记录不会计入统计。"
+            )
+        sources.append({"type": "daily_snapshot", "title": f"{date_label}饮食汇总"})
+
     # ── Dashboard summary ──
     elif reasoning.request_type == "dashboard_summary":
         dash = await get_dashboard_snapshot(db, user_id)
@@ -596,27 +710,96 @@ async def execute_action(
     user_id = str(current_user.id)
     logger.warning("TRACE_ASSISTANT_ACTION_EXECUTE_START action_type=%s", body.type)
 
-    # Phase 17: Tool registry pre-check — lightweight, does not replace business-auth
-    from app.services.tool_registry import is_tool_allowed
+    # Phase 17: Tool registry pre-check
+    from app.services.tool_registry import is_tool_allowed, get_tool_spec
     ctx = {"confirmed_by_user": True, "action_type": body.type, "source": "assistant_action_execute_endpoint"}
     if not is_tool_allowed("execute_assistant_action", ctx):
         logger.warning("TRACE_TOOL_REGISTRY_ACTION_BLOCKED action_type=%s", body.type)
         return AssistantActionExecuteResponse(ok=False, type=body.type, message="该操作需要用户确认")
 
+    tool_spec = get_tool_spec("execute_assistant_action")
+    risk_level = tool_spec.risk_level if tool_spec else "medium"
+    requires_conf = tool_spec.requires_confirmation if tool_spec else True
+
+    # Phase 18: Audit — try read before_snapshot (failure must not block action)
+    before_snapshot = None
+    if body.type == "save_current_record":
+        try:
+            from app.services.assistant_tools import get_dashboard_snapshot, get_record_detail_snapshot
+            rid = body.payload.get("record_id", "")
+            rec_before = await get_record_detail_snapshot(db, user_id, rid) if rid else None
+            dash_before = await get_dashboard_snapshot(db, user_id)
+            before_snapshot = {
+                "record_id": rid,
+                "was_saved": rec_before.get("is_confirmed") if rec_before else None,
+                "record_calories": rec_before.get("calories") if rec_before else None,
+                "today_calories_before": dash_before.get("consumed_calories"),
+                "target_calories_before": dash_before.get("target_calories"),
+                "remaining_calories_before": dash_before.get("remaining_calories"),
+            }
+            logger.warning("TRACE_ACTION_AUDIT_BEFORE_SNAPSHOT action_type=%s available=true", body.type)
+        except Exception as snap_exc:
+            logger.warning("TRACE_ACTION_AUDIT_BEFORE_SNAPSHOT action_type=%s available=false error=%s",
+                           body.type, str(snap_exc)[:200])
+
+    # Phase 18: Audit — create pending log (failure must not block action)
+    from app.services.assistant_action_audit import create_action_audit_log, mark_action_audit_success, mark_action_audit_failed
+    audit_log = await create_action_audit_log(
+        db, user_id, body.action_id, body.type, body.payload,
+        risk_level=risk_level, requires_confirmation=requires_conf,
+        before_snapshot=before_snapshot,
+    )
+    audit_log_id = str(audit_log.id) if audit_log else None
+    if audit_log_id is None:
+        logger.warning("TRACE_ACTION_AUDIT_FAILED stage=create_pending action_type=%s (action will proceed)", body.type)
+
+    # Execute the action
     result = await execute_assistant_action(db, user_id, body.type, body.payload)
 
-    if result.get("ok"):
-        logger.warning("TRACE_ASSISTANT_ACTION_EXECUTE_SUCCESS action_type=%s", body.type)
-        # Observer: re-read business state after action succeeds
-        try:
-            from app.services.assistant_observer import observe_after_action
-            obs = await observe_after_action(db, user_id, body.type, result, body.payload)
-            if obs:
-                result["post_action_observation"] = obs.get("post_action_observation")
-                result["assistant_followup_message"] = obs.get("assistant_followup_message")
-        except Exception as obs_exc:
-            logger.warning("TRACE_ASSISTANT_OBSERVER_FAILED action_type=%s error=%s", body.type, obs_exc)
-            # Observer failure must not roll back action
+    if not result.get("ok"):
+        # Action failed — mark audit as failed (must not block response)
+        if audit_log_id:
+            err_msg = result.get("message", "未知错误")
+            await mark_action_audit_failed(db, audit_log_id, err_msg, result)
+        logger.warning(
+            "TRACE_ASSISTANT_ACTION_EXECUTE_RESPONSE has_observation=false has_followup=false (action failed)"
+        )
+        return AssistantActionExecuteResponse(**result)
+
+    # Action succeeded
+    logger.warning("TRACE_ASSISTANT_ACTION_EXECUTE_SUCCESS action_type=%s", body.type)
+
+    # Observer: re-read business state after action succeeds
+    after_snapshot = None
+    obs_warning = False
+    try:
+        from app.services.assistant_observer import observe_after_action
+        obs = await observe_after_action(db, user_id, body.type, result, body.payload)
+        if obs:
+            result["post_action_observation"] = obs.get("post_action_observation")
+            result["assistant_followup_message"] = obs.get("assistant_followup_message")
+            # Extract after_snapshot from observer
+            post_obs = obs.get("post_action_observation", {}) or {}
+            if post_obs:
+                dash_after = post_obs.get("dashboard_after", {})
+                rec_after = post_obs.get("record", {})
+                after_snapshot = {
+                    "record_id": rec_after.get("id", ""),
+                    "is_saved": True,
+                    "record_calories": rec_after.get("calories"),
+                    "today_calories_after": dash_after.get("today_calories"),
+                    "target_calories_after": dash_after.get("target_calories"),
+                    "remaining_calories_after": dash_after.get("remaining_calories"),
+                }
+    except Exception as obs_exc:
+        logger.warning("TRACE_ASSISTANT_OBSERVER_FAILED action_type=%s error=%s", body.type, obs_exc)
+        obs_warning = True
+
+    # Phase 18: Audit — mark success (must not block response)
+    if audit_log_id:
+        if obs_warning:
+            result["observer_warning"] = True
+        await mark_action_audit_success(db, audit_log_id, result, after_snapshot)
 
     logger.warning(
         "TRACE_ASSISTANT_ACTION_EXECUTE_RESPONSE has_observation=%s has_followup=%s",

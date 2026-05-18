@@ -46,7 +46,7 @@ KNOWLEDGE_KEYWORDS = {
     "怎么吃", "原理", "区别", "减脂", "增肌",
     "冒菜", "麻辣烫", "火锅", "未保存记录", "统计规则",
     "蛋白质", "碳水", "脂肪", "营养", "维生素", "矿物质",
-    "为什么", "作用", "功能", "液体热量", "怎么", "是什么",
+    "为什么", "作用", "功能", "液体热量", "是什么",
 }
 DATA_INTENT_KEYWORDS = {
     "今天", "今日", "本周", "这周", "最近",
@@ -135,6 +135,43 @@ FOOD_CLUES = {
 # ── Food/drink intent verbs ──
 FOOD_VERB_CLUES = {"吃", "喝", "尝", "试", "点", "买", "叫", "要"}
 
+# ── Daily history: date expressions + food data semantics ──
+DAILY_DATE_PATTERNS = [
+    (r"昨天", "昨天"),
+    (r"前天", "前天"),
+    (r"大前天", "大前天"),
+    (r"上周一", "上周一"), (r"上周二", "上周二"), (r"上周三", "上周三"),
+    (r"上周四", "上周四"), (r"上周五", "上周五"), (r"上周六", "上周六"), (r"上周日", "上周日"),
+    # Chinese month-day: 5月16, 5月16日, 5月16号 (日/号 optional)
+    (r"\d{1,2}月\d{1,2}(?:[日号])?", "指定日期"),
+    # Dot format: 5.16, 05.16
+    (r"\d{1,2}\.\d{1,2}", "指定日期"),
+    # Dash format: 5-16, 2026-05-16
+    (r"\d{4}-\d{1,2}-\d{1,2}", "指定日期"),
+    (r"\d{1,2}-\d{1,2}", "指定日期"),
+    # Weekday
+    (r"星期[一二三四五六日天]", "本周"),
+]
+DAILY_FOOD_SEMANTICS = {
+    "摄入", "热量", "卡路里", "蛋白质", "碳水", "脂肪",
+    "吃了", "吃了多少", "有没有记录", "有没有饮食", "超标",
+    "记录", "饮食记录", "统计", "营养",
+    "吃的怎么样", "吃得怎么样", "饮食怎么样", "吃得好吗",
+    "饮食情况", "饮食总结", "营养怎么样", "吃得健康吗",
+    "控制得怎么样", "饮食健康吗", "吃得如何",
+    "饮食",  # catch-all for "饮食" in date context
+}
+
+def _detect_date_expression(msg: str) -> tuple[str | None, str | None]:
+    """Detect natural-language date expressions in a message.
+    Returns (date_expr, date_label) or (None, None).
+    Rule: only trigger if there's ALSO food data semantics in the message.
+    """
+    for pattern, label in DAILY_DATE_PATTERNS:
+        if re.search(pattern, msg):
+            return (re.search(pattern, msg).group(0), label)
+    return (None, None)
+
 # ── Food decision semantic patterns ──
 FOOD_DECISION_SEMANTIC_PATTERNS = [
     r"想[吃喝和尝试点买叫要]",
@@ -212,8 +249,8 @@ def detect_food_or_drink_entity(message: str) -> dict:
     if match:
         candidate = match.group(1)
         # Filter out non-food words
-        noise = {"了吗", "什么", "怎么", "多少", "能不能", "可以吗", "怎么样", "会不会", "要不要", "该不该"}
-        if candidate not in noise and not candidate.startswith("吗") and not candidate.startswith("怎么样"):
+        noise = {"了吗", "什么", "怎么", "多少", "能不能", "可以吗", "怎么样", "会不会", "要不要", "该不该", "得怎么样", "了多少", "了什么", "什么样的", "什么东西", "干嘛", "的怎么样", "吃得怎么样", "吃的怎么样", "摄入多少", "热量多少", "饮食怎么样", "有没有记录", "有没有超标"}
+        if candidate not in noise and not candidate.startswith("吗") and not candidate.startswith("怎么样") and not candidate.startswith("得") and not candidate.startswith("的"):
             entity_text = candidate
             # Determine type from clues
             has_drink_clue = any(c in candidate for c in DRINK_CLUES)
@@ -378,6 +415,24 @@ def build_reasoning_result(
             should_suggest_action=True, risk_level="low",
             answer_strategy="简短确认动作，让用户确认后执行",
         )
+
+    # ── Priority 2.5: Daily history (yesterday/date + food semantics) — BEFORE food_decision ──
+    date_expr, date_label = _detect_date_expression(msg)
+    if date_expr:
+        has_food_semantics = _match_any(msg, DAILY_FOOD_SEMANTICS)
+        has_non_food = _match_any(msg, {"股市", "股票", "天气", "新闻", "比赛", "考试", "游戏", "电影"})
+        if has_food_semantics and not has_non_food:
+            logger.warning("TRACE_REASONING_RESULT request_type=daily_history decision_mode=data_driven_advice date_expr=%s date_label=%s",
+                           date_expr, date_label)
+            return AssistantReasoningResult(
+                request_type="daily_history", decision_mode="data_driven_advice",
+                should_use_user_data=True,
+                required_tools=["daily_snapshot", "user_settings", "time_context"],
+                risk_level="low",
+                answer_strategy=f"查询{date_label}的已保存饮食记录，只统计已保存记录。如果记录数>0，直接回答统计结果，禁止建议用户去页面查看或说系统不能查历史。如果记录数为0，明确说明该日期无已保存记录，摄入为0 kcal，不要编造正数摄入。",
+                user_visible_constraints=["仅统计已保存记录", f"查询日期: {date_label}"],
+                hidden_constraints=["validate_numbers", "no_fabrication_when_zero"],
+            )
 
     # ── Priority 3: Food decision (semantic + entity-based) ──
     entity = detect_food_or_drink_entity(msg)

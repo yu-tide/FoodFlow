@@ -207,6 +207,30 @@ def sanitize_llm_context(tool_context: dict, page_context: dict | None = None) -
             "脂肪合计": f"{w.get('total_fat', 0)}g",
         }
 
+    # ── daily_snapshot → Chinese (daily_history path) ──
+    if "daily_snapshot" in tool_context:
+        ds = tool_context["daily_snapshot"]
+        daily_facts = {
+            "日期": ds.get("date", ""),
+            "日期标签": ds.get("date_label", ""),
+            "已保存记录数": ds.get("record_count", 0),
+            "总热量": f"{ds.get('total_calories', 0)} kcal",
+            "蛋白质": f"{ds.get('protein', 0)}g",
+            "碳水": f"{ds.get('carbs', 0)}g",
+            "脂肪": f"{ds.get('fat', 0)}g",
+        }
+        records = ds.get("records", [])
+        if records:
+            daily_facts["记录摘要"] = [
+                f"{r.get('name', '')} {r.get('calories', 0)}kcal"
+                for r in records[:10]
+            ]
+        if ds.get("record_count", 0) == 0:
+            daily_facts["提示"] = "该日期没有已保存记录，摄入为 0 kcal。"
+        result["历史单日饮食统计"] = daily_facts
+        logger.warning("TRACE_DAILY_FACTS_BUILT record_count=%s total_calories=%s",
+                       ds.get("record_count", 0), ds.get("total_calories", 0))
+
     # ── food_record → Chinese ──
     if "food_record" in tool_context:
         fr = tool_context["food_record"]
@@ -571,6 +595,19 @@ def validate_assistant_answer(
         if not any(ind in answer for ind in refusal_indicators):
             issues.append("missing_refusal_language")
 
+    # 3b. Daily history: forbid product-limitation lies
+    if reasoning and reasoning.request_type == "daily_history":
+        forbidden_phrases = [
+            "只能查看今日", "只支持今日", "无法查看历史", "无法查看昨日",
+            "不能查看昨日", "不支持历史", "请去历史页面", "请去报告页",
+            "当前不支持历史记录", "只提供今日", "只能今日",
+            "去饮食记录页面", "去页面查看", "到页面去查看", "去记录页",
+            "请前往页面", "请到页面",
+        ]
+        for phrase in forbidden_phrases:
+            if phrase in answer:
+                issues.append(f"daily_history_forbidden_phrase:{phrase}")
+
     # 4. Number consistency (for ALL request types with calorie data)
     if facts:
         # Top-level consumed checks
@@ -631,8 +668,43 @@ def validate_assistant_answer(
                 if t in answer:
                     issues.append(f"time_mismatch:night_has_morning_term:{t}")
 
-        # Nested facts check (今日汇总, 本周统计, 营养目标, 当前记录)
-        for top_key in ["今日汇总", "本周统计", "营养目标", "当前记录"]:
+        # 6. Daily history validation (reads Chinese keys from sanitized context)
+        daily_snap = facts.get("历史单日饮食统计", {})
+        if isinstance(daily_snap, dict):
+            daily_count = daily_snap.get("已保存记录数", -1)
+            total_cal_str = str(daily_snap.get("总热量", "0 kcal"))
+            cal_match = re.search(r"(\d+)", total_cal_str)
+            daily_cal = int(cal_match.group(1)) if cal_match else 0
+
+            if daily_count == 0 or daily_cal == 0:
+                # Forbid fabricated positive intake when data is empty
+                daily_intake_patterns = [
+                    r"(?:昨天|前天|上周.{0,3}|那.{0,3}天|目标日期)\s*摄入了?\s*(\d+)\s*kcal",
+                    r"(?:昨天|前天|上周.{0,3}|那.{0,3}天|目标日期)\s*摄入\s*(\d+)\s*千卡",
+                    r"(?:昨天|前天|上周.{0,3}|那.{0,3}天)\s*吃了\s*(\d+)\s*kcal",
+                    r"摄入了\s*(\d+)\s*kcal",
+                    r"摄入\s*(\d+)\s*千卡",
+                    r"吃了\s*(\d+)\s*kcal",
+                ]
+                for p in daily_intake_patterns:
+                    m = re.search(p, answer)
+                    if m and int(m.group(1)) > 0:
+                        issues.append(f"daily_zero_calorie_fabrication:{m.group(1)}kcal")
+                        break
+
+            elif daily_count > 0 and daily_cal > 0:
+                # Forbid "no data" claims when data actually exists
+                no_data_phrases = [
+                    "暂无已保存数据", "没有该日期记录", "没有已保存记录",
+                    "未找到记录", "无法确认是否属于该日期",
+                ]
+                for phrase in no_data_phrases:
+                    if phrase in answer:
+                        issues.append(f"daily_has_data_but_claims_none:{phrase}")
+                        break
+
+        # Nested facts check (今日汇总, 本周统计, 营养目标, 当前记录, 历史单日饮食统计)
+        for top_key in ["今日汇总", "本周统计", "营养目标", "当前记录", "历史单日饮食统计"]:
             nested = facts.get(top_key, {})
             if isinstance(nested, dict):
                 nested_saved = nested.get("已保存热量", "")
@@ -737,9 +809,21 @@ def clean_assistant_answer(answer: str) -> str:
         filtered.append(line)
     answer = "\n".join(filtered)
 
-    # Replace remaining technical terms
-    answer = answer.replace("confirmed", "已保存记录")
-    answer = answer.replace("status == confirmed", "已保存记录")
+    # Replace internal English status terms with Chinese equivalents (word-boundary only)
+    answer = re.sub(r'\bconfirmed\b(?![一-鿿])', '已保存', answer)
+    answer = re.sub(r'\bdraft\b(?![一-鿿])', '未保存', answer)
+    answer = re.sub(r'\bpending\b(?![一-鿿])', '处理中', answer)
+    # Strip lines containing raw status/internal/JSON words
+    raw_terms = {"status", "internal", "JSON", "json"}
+    lines = answer.split("\n")
+    filtered = []
+    for line in lines:
+        stripped = line.strip().lower()
+        if any(term.lower() in stripped for term in raw_terms):
+            logger.warning("clean_assistant_answer: stripped line with raw term: %s", line[:80])
+            continue
+        filtered.append(line)
+    answer = "\n".join(filtered)
 
     # Strip JSON code blocks
     answer = re.sub(r"```json[\s\S]*?```", "", answer)
@@ -963,7 +1047,7 @@ def _tool_context_has_data(tool_context: dict) -> bool:
     data_keys = {
         "personalized_food_decision", "meal_plan_advice",
         "dashboard_summary", "user_settings", "recent_records",
-        "weekly_statistics", "food_record",
+        "weekly_statistics", "food_record", "daily_snapshot",
     }
     return bool(data_keys & set(tool_context.keys()))
 
@@ -1043,8 +1127,13 @@ async def generate_assistant_answer_stream(
     has_data = _tool_context_has_data(tool_context) or (reasoning and reasoning.should_use_user_data)
     if has_data:
         logger.warning("TRACE_STREAM_MODE mode=validated_pseudo_stream path=DATA_RICH")
+        # Build facts for validation (same as non-streaming path)
+        stream_facts = None
+        if reasoning and reasoning.should_use_user_data and tool_context:
+            from app.services.assistant_facts_builder import build_facts_for_llm
+            stream_facts = build_facts_for_llm(reasoning, tool_context, page_context)
         user_content = _build_user_content(user_message, page, page_context, tool_context)
-        final_text = _generate_and_validate(user_content, template_fallback, facts=None, log_prefix="DATA_STREAM", reasoning=reasoning)
+        final_text = _generate_and_validate(user_content, template_fallback, facts=stream_facts, log_prefix="DATA_STREAM", reasoning=reasoning)
         for chunk in split_text_for_stream(final_text):
             yield chunk
             import asyncio
