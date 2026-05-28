@@ -254,4 +254,4 @@ MIT License — 详见 [LICENSE](LICENSE)
 
 ---
 
-GitHub: [https://github.com/yourusername/FoodFlow](https://github.com/yourusername/FoodFlow)
+GitHub: [https://github.com/yu-tide/FoodFlow](https://github.com/yu-tide/FoodFlow)
